@@ -48,6 +48,8 @@
     code_action_safety
     completion
     completions
+    formatting
+    range_formatting
     construct
     doc_to_md
     document_flow

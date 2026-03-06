@@ -1,5 +1,7 @@
 # Unreleased (OCaml 4.14)
 
+- Backport `textDocument/rangeFormatting` from OCaml-LSP 1.26 (#1591).
+
 - Respect `includeDeclaration` in Find References, including shadowed bindings,
   and return name ranges for exception declarations. Reference searches remain
   limited to the current buffer with Merlin 4.19-414; this release does not add
