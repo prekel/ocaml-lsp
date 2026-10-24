@@ -212,8 +212,8 @@ describe("workspace/symbol", () => {
       workspaceFolders: [workspaceA.folder, workspaceB.folder],
     });
 
-    child_process.execSync("dune clean", { cwd: workspaceA.path });
-    child_process.execSync("dune clean", { cwd: workspaceB.path });
+    child_process.execSync("dune clean --root .", { cwd: workspaceA.path });
+    child_process.execSync("dune clean --root .", { cwd: workspaceB.path });
 
     type StarNotificationHandlerParams =
       Parameters<Protocol.StarNotificationHandler>;
