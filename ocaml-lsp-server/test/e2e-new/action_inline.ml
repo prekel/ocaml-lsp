@@ -41,7 +41,7 @@ let _ =
       let y = 1 in
       let x y = y in
       let y = 0 in
-      (y) + 1 |}]
+      (fun y -> y) y + 1 |}]
 ;;
 
 let%expect_test "shadow-3" =
@@ -105,11 +105,7 @@ let _ =
   let $x = 0 + 1 in
   (fun x -> x) x
 |};
-  [%expect
-    {|
-    let _ =
-      let x = 0 + 1 in
-      (fun x -> x) (0 + 1) |}]
+  [%expect {| |}]
 ;;
 
 let%expect_test "" =
@@ -119,11 +115,7 @@ let _ =
   let $x = 0 + 1 in
   (fun ~x -> x) ~x
 |};
-  [%expect
-    {|
-    let _ =
-      let x = 0 + 1 in
-      (fun ~x -> x) ~x:(0 + 1) |}]
+  [%expect {| |}]
 ;;
 
 let%expect_test "" =
@@ -133,11 +125,7 @@ let _ =
   let $x = 0 + 1 in
   (fun ?(x = 2) -> x) ~x
 |};
-  [%expect
-    {|
-    let _ =
-      let x = 0 + 1 in
-      (fun ?(x = 2) -> x) ~x:(0 + 1) |}]
+  [%expect {| |}]
 ;;
 
 let%expect_test "" =
@@ -189,7 +177,7 @@ let _ =
     {|
     let _ =
       let f x = x in
-      (1) |}]
+      (fun x -> x) 1 |}]
 ;;
 
 let%expect_test "" =
@@ -203,7 +191,7 @@ let _ =
     {|
     let _ =
       let f _ = 0 in
-      (0) |}]
+      (fun _ -> 0) 1 |}]
 ;;
 
 let%expect_test "" =
@@ -217,7 +205,7 @@ let _ =
     {|
     let _ =
       let f x = x + x in
-      (1 + 1) |}]
+      (fun x -> x + x) 1 |}]
 ;;
 
 let%expect_test "" =
@@ -231,7 +219,7 @@ let _ =
     {|
     let _ =
       let f x = x + x in
-      (let x = g 1 in x + x) |}]
+      (fun x -> x + x) (g 1) |}]
 ;;
 
 let%expect_test "" =
@@ -241,11 +229,7 @@ let _ =
   let $f x y = x + y in
   f 0
 |};
-  [%expect
-    {|
-    let _ =
-      let f x y = x + y in
-      (fun y -> 0 + y) |}]
+  [%expect {| |}]
 ;;
 
 let%expect_test "" =
@@ -255,11 +239,7 @@ let _ =
   let $f x ~y = x + y in
   f ~y:0
 |};
-  [%expect
-    {|
-    let _ =
-      let f x ~y = x + y in
-      ((fun x ~y -> x + y) ~y:0) |}]
+  [%expect {| |}]
 ;;
 
 let%expect_test "" =
@@ -269,11 +249,7 @@ let _ =
   let $f ~x y = x + y in
   f ~x:0
 |};
-  [%expect
-    {|
-    let _ =
-      let f ~x y = x + y in
-      (fun y -> 0 + y) |}]
+  [%expect {| |}]
 ;;
 
 let%expect_test "" =
@@ -283,11 +259,7 @@ let _ =
   let $f ~x ~y = x + y in
   f ~y:0
 |};
-  [%expect
-    {|
-    let _ =
-      let f ~x ~y = x + y in
-      (fun ~x -> x + 0) |}]
+  [%expect {| |}]
 ;;
 
 let%expect_test "" =
@@ -301,7 +273,7 @@ let _ =
     {|
     let _ =
       let f (x : int) = x + 1 in
-      (0 + 1) |}]
+      (fun (x : int) -> x + 1) 0 |}]
 ;;
 
 (* TODO: allow beta reduction with locally abstract types *)
@@ -312,11 +284,7 @@ let _ =
   let $f (type a) (x : a) = x in
   f 0
 |};
-  [%expect
-    {|
-    let _ =
-      let f (type a) (x : a) = x in
-      ((fun (type a) -> fun (x : a) -> x) 0) |}]
+  [%expect {| |}]
 ;;
 
 let%expect_test "" =
@@ -330,7 +298,7 @@ let _ =
     {|
     let _ =
       let f : int -> int = fun x -> x in
-      (0) |}]
+      (fun x -> x) 0 |}]
 ;;
 
 let%expect_test "" =
@@ -344,7 +312,7 @@ let _ =
     {|
     let _ =
       let f = function Some x -> x | None -> 0 in
-      ((function | Some x -> x | None -> 0) (Some 1)) |}]
+      (function | Some x -> x | None -> 0) (Some 1) |}]
 ;;
 
 (* TODO: allow beta reduction with `as` *)
@@ -359,7 +327,7 @@ let _ =
     {|
     let _ =
       let f (x as y) = y + 1 in
-      (let x as y = 1 in y + 1) |}]
+      (fun (x as y) -> y + 1) 1 |}]
 ;;
 
 let%expect_test "" =
@@ -373,7 +341,7 @@ let _ =
     {|
     let _ =
       let f 1 = 2 in
-      (let 1 = 2 in 2) |}]
+      (fun 1 -> 2) 2 |}]
 ;;
 
 let%expect_test "" =
@@ -387,7 +355,7 @@ let _ =
     {|
     let _ =
       let f (x, y) = x + y in
-      (1 + 2) |}]
+      (fun (x, y) -> x + y) (1, 2) |}]
 ;;
 
 let%expect_test "" =
@@ -401,7 +369,7 @@ let _ =
     {|
     let _ =
       let f (x, y) = x + y + y in
-      (let y = 2 + 3 in (1 + y) + y) |}]
+      (fun (x, y) -> (x + y) + y) (1, 2 + 3) |}]
 ;;
 
 let%expect_test "" =
@@ -417,7 +385,7 @@ let _ =
     let _ =
       let f (x, y) = x + y + y in
       let z = (1, 2) in
-      (let (x, y) = z in (x + y) + y) |}]
+      (fun (x, y) -> (x + y) + y) z |}]
 ;;
 
 (* TODO *)
@@ -434,7 +402,7 @@ let _ =
     type t = { x : int; y : int }
     let _ =
       let f { x; y } = x + y in
-      (let { x; y } = { x = 1; y = 1 } in x + y) |}]
+      (fun { x; y } -> x + y) { x = 1; y = 1 } |}]
 ;;
 
 (* TODO: beta reduce record literals as with tuples *)
@@ -451,7 +419,7 @@ let _ =
     type t = { x : int; y : int }
     let _ =
       let f { x; _ } = x + 1 in
-      (let { x;_} = { x = 1; y = 1 } in x + 1) |}]
+      (fun { x;_} -> x + 1) { x = 1; y = 1 } |}]
 ;;
 
 let%expect_test "" =
@@ -465,7 +433,7 @@ let _ =
     {|
     let _ =
       let f x = [%test] x in
-      (([%test ]) 1) |}]
+      (fun x -> ([%test ]) x) 1 |}]
 ;;
 
 let%expect_test "" =
@@ -479,7 +447,7 @@ let _ =
     {|
     let _ =
       let f x = x in
-      [%test] (1) |}]
+      [%test] ((fun x -> x) 1) |}]
 ;;
 
 let%expect_test "" =
@@ -489,11 +457,7 @@ let _ =
   let $f x = (* test comment *) x in
   f 1
 |};
-  [%expect
-    {|
-    let _ =
-      let f x = (* test comment *) x in
-      (1) |}]
+  [%expect {| |}]
 ;;
 
 let%expect_test "" =
@@ -507,7 +471,7 @@ let _ =
     {|
     let _ =
       let f x = x in
-      (* test comment *) (1) |}]
+      (* test comment *) (fun x -> x) 1 |}]
 ;;
 
 let%expect_test "" =
@@ -519,7 +483,7 @@ let g y = f y
   [%expect
     {|
     let f x = x
-    let g y = (y) |}]
+    let g y = (fun x -> x) y |}]
 ;;
 
 (* TODO *)
@@ -536,7 +500,7 @@ let h = M.f
     {|
     module M = struct
       let f x = x
-      let g y = (y)
+      let g y = (fun x -> x) y
     end
     let h = M.f |}]
 ;;

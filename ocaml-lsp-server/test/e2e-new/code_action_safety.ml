@@ -159,3 +159,131 @@ let f (type a) (x : a) = $let y : a = x in y$
   [%expect {| unavailable |}]
 ;;
 
+let%expect_test "inline refuses to duplicate a shared reference" =
+  unavailable
+    "Inline into uses"
+    {|
+let f () = let $x = ref 0 in incr x; !x
+|};
+  [%expect {| unavailable |}]
+;;
+
+let%expect_test "inline refuses an effectful initializer" =
+  unavailable
+    "Inline into uses"
+    {|
+let calls = ref 0
+let $x = (incr calls; 1)
+let result = x + x
+|};
+  [%expect {| unavailable |}]
+;;
+
+let%expect_test "inline preserves ignored argument effects" =
+  preserves_runtime
+    "Inline into uses"
+    {|
+let calls = ref 0
+let $f _ = 1
+let () = assert (f (incr calls) = 1); assert (!calls = 1)
+|};
+  [%expect {| preserved |}]
+;;
+
+let%expect_test "inline preserves argument order and single evaluation" =
+  preserves_runtime
+    "Inline into uses"
+    {|
+let log = ref []
+let arg n = log := n :: !log; n
+let $f x y = x + x + y
+let () = assert (f (arg 1) (arg 2) = 4); assert (!log = [1; 2])
+|};
+  [%expect {| preserved |}]
+;;
+
+let%expect_test "inline preserves ignored argument exceptions" =
+  preserves_runtime
+    "Inline into uses"
+    {|
+let $f _ = 1
+let () = assert (try ignore (f (failwith "expected")); false with Failure _ -> true)
+|};
+  [%expect {| preserved |}]
+;;
+
+let%expect_test "inline refuses partial application" =
+  unavailable
+    "Inline into uses"
+    {|
+let $f x y = x + y
+let g = f 1
+|};
+  [%expect {| unavailable |}]
+;;
+
+let%expect_test "inline preserves labelled argument syntax" =
+  preserves_runtime
+    "Inline into uses"
+    {|
+let $x = 1
+let f ~x = x + 1
+let () = assert (f ~x = 2); assert (f ~x:x = 2)
+|};
+  [%expect {| preserved |}]
+;;
+
+let%expect_test "inline preserves optional argument syntax" =
+  preserves_runtime
+    "Inline into uses"
+    {|
+let $x = 1
+let f ?(x = 0) () = x + 1
+let () = assert (f ~x () = 2); assert (f ~x:x () = 2)
+|};
+  [%expect {| preserved |}]
+;;
+
+let%expect_test "inline refuses escaping function values" =
+  unavailable
+    "Inline into uses"
+    {|
+let $f x = x + 1
+let same = f == f
+|};
+  [%expect {| unavailable |}]
+;;
+
+let%expect_test "inline refuses a partially safe transformation" =
+  unavailable
+    "Inline into uses"
+    {|
+let y = 1
+let $f x = x + y
+let good = f 1
+let bad = let y = 2 in f 1
+|};
+  [%expect {| unavailable |}]
+;;
+
+let%expect_test "unsafe actions explain refusal to supporting clients" =
+  let source, range =
+    Code_actions.parse_selection "let f () = let $x = ref 0 in incr x; !x"
+  in
+  let codeAction = CodeActionClientCapabilities.create ~disabledSupport:true () in
+  let textDocument = TextDocumentClientCapabilities.create ~codeAction () in
+  let capabilities = ClientCapabilities.create ~textDocument () in
+  Code_actions.iter_code_actions ~capabilities ~source range (fun actions ->
+    let action =
+      Option.value_exn actions
+      |> List.find_map ~f:(function
+        | `CodeAction ({ CodeAction.title = "Inline into uses"; _ } as action) ->
+          Some action
+        | _ -> None)
+      |> Option.value_exn
+    in
+    assert (Option.is_none action.edit);
+    print_endline (Option.value_exn action.disabled).reason);
+  [%expect {| Inlining would repeat evaluation or allocation of the binding |}]
+;;
+
