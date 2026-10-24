@@ -209,8 +209,8 @@ let () =
 |ocaml}
   in
   let range =
-    let start = Position.create ~line:1 ~character:7 in
-    let end_ = Position.create ~line:1 ~character:8 in
+    let start = Position.create ~line:1 ~character:6 in
+    let end_ = Position.create ~line:1 ~character:7 in
     Range.create ~start ~end_
   in
   print_code_actions source range ~filter:find_annotate_action;
