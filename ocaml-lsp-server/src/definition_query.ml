@@ -1,26 +1,16 @@
 open Import
 open Fiber.O
 
-let location_of_merlin_loc uri : _ -> (_, string) result = function
-  | `At_origin -> Error "Already at definition point"
-  | `Builtin s ->
-    Error (sprintf "%S is a builtin, it is not possible to jump to its definition" s)
+let location_of_merlin_loc uri range : _ -> (_, string) result = function
+  | `At_origin | `Builtin _ | `Invalid_context | `Not_found _ | `Not_in_env _ -> Ok None
   | `File_not_found s -> Error (sprintf "File_not_found: %s" s)
-  | `Invalid_context -> Error "Not a valid identifier"
-  | `Not_found (ident, where) ->
-    let msg =
-      let msg = sprintf "%S not found." ident in
-      match where with
-      | None -> msg
-      | Some w -> sprintf "%s last looked in %s" msg w
-    in
-    Error msg
-  | `Not_in_env m -> Error (sprintf "Not in environment: %s" m)
   | `Found (path, lex_position) ->
     Ok
       (Position.of_lexical_position lex_position
        |> Option.map ~f:(fun position ->
-         let range = { Range.start = position; end_ = position } in
+         let range =
+           Option.value range ~default:{ Range.start = position; end_ = position }
+         in
          let uri =
            match path with
            | None -> uri
@@ -44,7 +34,33 @@ let run kind (state : State.t) uri position =
       | `Type_definition -> Query_protocol.Locate_type pos, "type definition"
     in
     let* result = Document.Merlin.dispatch_exn ~name doc command in
-    (match location_of_merlin_loc uri result with
+    let* range =
+      match result with
+      | `Found (path, target_position) ->
+        let target_uri = Option.fold path ~init:uri ~f:(fun _ path -> Uri.of_path path) in
+        (match Document_store.get_opt state.store target_uri with
+         | Some target ->
+           (match Document.kind target with
+            | `Other -> Fiber.return None
+            | `Merlin target ->
+              Document.Merlin.with_pipeline_exn
+                ~name:"definition range"
+                target
+                (fun pipeline ->
+                   let source_position =
+                     if Uri.equal uri target_uri
+                     then Some (Position.logical position)
+                     else None
+                   in
+                   Navigation.definition_range
+                     pipeline
+                     target_position
+                     ~type_definition:(kind = `Type_definition)
+                     ~source_position))
+         | None -> Fiber.return None)
+      | _ -> Fiber.return None
+    in
+    (match location_of_merlin_loc uri range result with
      | Ok s -> Fiber.return s
      | Error err_msg ->
        let kind =

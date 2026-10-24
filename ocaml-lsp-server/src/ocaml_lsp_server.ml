@@ -420,16 +420,20 @@ let selection_range
     List.filter_opt ranges
 ;;
 
-let references (state : State.t) { ReferenceParams.textDocument = { uri }; position; _ } =
+let references
+      (state : State.t)
+      { ReferenceParams.textDocument = { uri }; position; context; _ }
+  =
   let doc = Document_store.get state.store uri in
   match Document.kind doc with
   | `Other -> Fiber.return None
   | `Merlin doc ->
-    let+ locs, _status =
-      Document.Merlin.dispatch_exn
-        ~name:"occurrences"
-        doc
-        (Occurrences (`Ident_at (Position.logical position), `Buffer))
+    let+ locs =
+      Document.Merlin.with_pipeline_exn ~name:"occurrences" doc (fun pipeline ->
+        Navigation.references
+          pipeline
+          (Position.logical position)
+          ~include_declaration:context.includeDeclaration)
     in
     Some
       (List.map locs ~f:(fun loc ->

@@ -1,5 +1,12 @@
 # Unreleased (OCaml 4.14)
 
+- Respect `includeDeclaration` in Find References, including shadowed bindings,
+  and return name ranges for exception declarations. Reference searches remain
+  limited to the current buffer with Merlin 4.19-414; this release does not add
+  a project index.
+- Return complete identifier ranges for definition, declaration, and type
+  definition targets in open documents. Return no target for builtins, unresolved
+  identifiers, and other ordinary lookup misses instead of failing the request.
 - Respect the complete selection when adding and removing type annotations, and
   preserve nested annotations when removing an outer constraint.
 - Generate collision-free extraction names and deduplicate extracted parameters.
