@@ -1,5 +1,6 @@
 # Unreleased (OCaml 4.14)
 
+- Return inlay hints only inside the requested range (backport of #2155).
 - Clamp recovered selection ranges to the source and keep a containing result
   for each requested position (backports of #2061 and #2170).
 - Backport `textDocument/rangeFormatting` from OCaml-LSP 1.26 (#1591).

@@ -59,7 +59,9 @@ let compute (state : State.t) { InlayHintParams.range; textDocument = { uri }; _
               ~paddingLeft:false
               ~paddingRight:false
               ())
-          hints)
+          hints
+        |> List.filter ~f:(fun (hint : InlayHint.t) ->
+          Range.contains range { start = hint.position; end_ = hint.position }))
     in
     Some hints
 ;;

@@ -72,6 +72,26 @@ let%expect_test "optional argument" =
   [%expect {| let f ?x$: 'a option$ () = x |}]
 ;;
 
+let%expect_test "function parameter hint lies outside the requested range" =
+  let range =
+    Range.create
+      ~start:(Position.create ~line:0 ~character:0)
+      ~end_:(Position.create ~line:0 ~character:6)
+  in
+  apply_inlay_hints ~range ~source:"let f x = x" ~hint_function_params:true ();
+  [%expect {| let f x = x |}]
+;;
+
+let%expect_test "function parameter hint at the requested boundary" =
+  let range =
+    Range.create
+      ~start:(Position.create ~line:0 ~character:0)
+      ~end_:(Position.create ~line:0 ~character:7)
+  in
+  apply_inlay_hints ~range ~source:"let f x = x" ~hint_function_params:true ();
+  [%expect {| let f x$: 'a$ = x |}]
+;;
+
 let%expect_test "optional argument with value" =
   apply_inlay_hints ~source:"let f ?(x = 1) () = x" ();
   [%expect {| let f ?(x$: int$ = 1) () = x |}]
