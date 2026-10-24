@@ -171,105 +171,172 @@ let run doc cancel : (TextEdit.t list, error) result Fiber.t =
          ~f:(Result.map ~f:(fun { stdout = to_; _ } -> Diff.edit ~from:contents ~to_))
 ;;
 
-(** Tries to access the formatter's configuration to determine the existing
-  margin, and returns an argument which sets the margin to the existing margin
-  minus the offset
-*)
-let compute_modified_margin binary cancel offset formatter =
-  let default = 80 in
+(* Snapshot the effective project settings, then run the explicit selection
+   request outside its ignore listings. --no-disable alone does not override
+   .ocamlformat-ignore: ocamlformat applies ignore files after CLI options. *)
+let with_range_args formatter binary cancel padding f =
   match formatter with
-  | Ocaml uri ->
-    let path = Uri.to_path uri |> Filename.dirname in
-    (* specifying cwd makes sure ocamlformat finds the correct root,
-       since we're not actually passing any file here *)
-    exec ~cwd:(Spawn.Working_dir.Path path) cancel binary [ "--print-config" ] ""
-    |> Fiber.map ~f:(fun res ->
-      let margin =
-        match res with
-        | Ok { stderr = config; _ } ->
-          config
-          |> String.split_lines
-          |> List.find_map ~f:(fun line ->
-            match String.drop_prefix line ~prefix:"margin=" with
-            | None -> None
-            | Some margin ->
-              String.split margin ~on:' ' |> List.hd |> Option.bind ~f:Int.of_string)
-          |> Option.value ~default
-        | Error _ -> default
-      in
-      let margin = margin - offset in
-      "--margin=" ^ Int.to_string margin)
   | Reason _ ->
     let margin =
       Sys.getenv_opt "REFMT_PRINT_WIDTH"
       |> Option.bind ~f:Int.of_string
-      |> Option.value ~default
+      |> Option.value ~default:80
     in
-    let margin = margin - offset in
-    Fiber.return ("--print-width=" ^ Int.to_string margin)
+    f (sprintf "--print-width=%d" (max 1 (margin - padding)) :: args formatter)
+  | Ocaml uri ->
+    let path = Uri.to_path uri in
+    let* configuration =
+      exec
+        ~cwd:(Spawn.Working_dir.Path (Filename.dirname path))
+        cancel
+        binary
+        [ "--print-config" ]
+        ""
+    in
+    (match configuration with
+     | Error e -> Fiber.return (Error e)
+     | Ok { stderr = configuration; _ } ->
+       let settings =
+         String.split_lines configuration
+         |> List.filter_map ~f:(fun line ->
+           (* Strip provenance, e.g. "margin=60 (file .ocamlformat:2)". *)
+           match String.split line ~on:' ' |> List.hd with
+           | Some setting
+             when List.length (String.split setting ~on:'=') = 2
+                  && not (String.is_prefix setting ~prefix:"profile=") ->
+             (* Every effective option is printed. Reapplying the profile
+                partway through would reset the preceding explicit options. *)
+             Some setting
+           | _ -> None)
+       in
+       let margin =
+         List.find_map settings ~f:(fun setting ->
+           String.drop_prefix setting ~prefix:"margin=" |> Option.bind ~f:Int.of_string)
+         |> Option.value ~default:80
+       in
+       let directory = Filename.temp_file "ocamllsp-selection-" "" in
+       Sys.remove directory;
+       Unix.mkdir directory 0o700;
+       let config_path = Filename.concat directory ".ocamlformat" in
+       Fiber.finalize
+         ~finally:(fun () ->
+           if Sys.file_exists config_path then Sys.remove config_path;
+           Unix.rmdir directory;
+           Fiber.return ())
+         (fun () ->
+            let channel = open_out config_path in
+            Fun.protect
+              ~finally:(fun () -> close_out channel)
+              (fun () ->
+                 output_string channel (String.concat ~sep:"\n" settings);
+                 output_string channel "\ndisable=false\n");
+            let extension =
+              if String.is_suffix path ~suffix:".mli" then ".mli" else ".ml"
+            in
+            let uri = Uri.of_path (Filename.concat directory ("selection" ^ extension)) in
+            f
+              ([ sprintf "--root=%s" directory
+               ; "--no-disable"
+               ; sprintf "--margin=%d" (max 1 (margin - padding))
+               ]
+               @ args (Ocaml uri))))
 ;;
 
 let range_formatter doc =
   match Document.syntax doc with
-  (* to support formatting semantic action snippets in these two files *)
   | Ocamllex | Menhir -> Ok (Ocaml (Document.uri doc))
   | _ -> formatter doc
 ;;
 
 let ( let++ ) x f = Fiber.map x ~f:(Result.map ~f)
 
-(** Formats a snippet of code in a larger string, given the start and stop offsets of the snippet
-    - slice out the range to be formatted, send to ocamlformat
-    - whitespace pad the start of lines in the reply based on [padding]
-    - stitch everything back together. *)
+let whitespace = function
+  | ' ' | '\n' | '\r' | '\t' -> true
+  | _ -> false
+;;
+
 let format_snippet ~start ~stop ~padding formatter binary cancel contents =
-  let prefix, to_format, suffix =
-    ( String.sub contents ~pos:0 ~len:start
-    , String.sub contents ~pos:start ~len:(stop - start)
-    , String.sub contents ~pos:stop ~len:(String.length contents - stop) )
-  in
-  let args = args formatter in
-  let args =
-    (* if we're formatting the start of a [let ... in] construct,
-        don't emit [;;] before the [in]! *)
-    let next =
-      String.trim suffix ~drop:(function
-        | ' ' | '\n' | '\r' | '\t' -> true
-        | _ -> false)
+  let selected = String.sub contents ~pos:start ~len:(stop - start) in
+  let stripped = String.trim selected ~drop:whitespace in
+  if String.is_empty stripped
+  then Fiber.return (Ok selected)
+  else (
+    let leading_length =
+      let rec loop index =
+        if index < String.length selected && whitespace selected.[index]
+        then loop (index + 1)
+        else index
+      in
+      loop 0
     in
-    if String.is_prefix ~prefix:"in" next || String.is_prefix ~prefix:";;" next
-    then "--let-binding-spacing=compact" :: args
-    else args
-  in
-  let pad s =
-    let spaces_pad = Bytes.make padding ' ' |> Bytes.to_string in
-    String.concat ~sep:"\n" (List.map (String.split_lines s) ~f:(( ^ ) spaces_pad))
-    |> String.trim ~drop:(( = ) ' ')
-  in
-  let open Fiber.O in
-  let* margin = compute_modified_margin binary cancel padding formatter in
-  let args = margin :: args in
-  let++ { stdout = formatted; _ } = exec cancel binary args to_format in
-  let formatted =
-    (* if the return is unchanged, don't insert extra padding *)
-    if String.equal formatted to_format then to_format else pad formatted
-  in
-  prefix ^ formatted ^ suffix
+    let trailing_start = leading_length + String.length stripped in
+    let leading = String.sub selected ~pos:0 ~len:leading_length in
+    let trailing =
+      String.sub
+        selected
+        ~pos:trailing_start
+        ~len:(String.length selected - trailing_start)
+    in
+    let padding =
+      Base.String.fold leading ~init:padding ~f:(fun column -> function
+        | '\n' -> 0
+        | _ -> column + 1)
+    in
+    with_range_args formatter binary cancel padding (fun args ->
+      let suffix =
+        String.sub contents ~pos:stop ~len:(String.length contents - stop)
+        |> String.trim ~drop:whitespace
+      in
+      let is_in =
+        String.is_prefix suffix ~prefix:"in"
+        && (String.length suffix = 2
+            || not
+                 (match suffix.[2] with
+                  | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '\'' -> true
+                  | _ -> false))
+      in
+      let args =
+        match formatter with
+        | Ocaml _ when is_in || String.is_prefix suffix ~prefix:";;" ->
+          "--let-binding-spacing=compact" :: args
+        | _ -> args
+      in
+      let++ { stdout = formatted; _ } = exec cancel binary args stripped in
+      let formatted =
+        String.split_lines formatted
+        |> String.concat ~sep:("\n" ^ Bytes.to_string (Bytes.make padding ' '))
+      in
+      leading ^ formatted ^ trailing))
 ;;
 
 let run_on_range doc range cancel : (TextEdit.t list, error) result Fiber.t =
-  let res =
-    let open Result.O in
-    let* formatter = range_formatter doc in
-    let+ binary = binary formatter in
-    binary, formatter
-  in
-  match res with
-  | Error e -> Fiber.return (Error e)
-  | Ok (binary, formatter) ->
-    let contents = Document.source doc |> Msource.text in
-    let start, stop = Text_document.absolute_range (Document.text_document doc) range in
-    let padding = range.start.character in
-    let++ to_ = format_snippet formatter binary cancel ~start ~stop ~padding contents in
-    Diff.edit ~from:contents ~to_
+  let contents = Document.text doc in
+  let start, stop = Text_document.absolute_range (Document.text_document doc) range in
+  if start > stop || Position.compare range.start range.end_ = Ordering.Gt
+  then
+    Jsonrpc.Response.Error.raise
+      (Jsonrpc.Response.Error.make
+         ~code:InvalidParams
+         ~message:"Invalid formatting range"
+         ())
+  else if start = stop
+  then Fiber.return (Ok [])
+  else (
+    let res =
+      let open Result.O in
+      let* formatter = range_formatter doc in
+      let+ binary = binary formatter in
+      binary, formatter
+    in
+    match res with
+    | Error e -> Fiber.return (Error e)
+    | Ok (binary, formatter) ->
+      let padding = range.start.character in
+      let++ formatted =
+        format_snippet formatter binary cancel ~start ~stop ~padding contents
+      in
+      let selected = String.sub contents ~pos:start ~len:(stop - start) in
+      if String.equal selected formatted
+      then []
+      else [ TextEdit.create ~range ~newText:formatted ])
 ;;

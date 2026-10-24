@@ -1,6 +1,9 @@
 # Unreleased (OCaml 4.14)
 
 - Backport `textDocument/rangeFormatting` from OCaml-LSP 1.26 (#1591).
+- Explicit selection formatting works even in `.ocamlformat-ignore` files,
+  including wildcard exclusions, while retaining the effective project settings.
+  Preserve boundary whitespace and return edits confined to the selection.
 
 - Respect `includeDeclaration` in Find References, including shadowed bindings,
   and return name ranges for exception declarations. Reference searches remain

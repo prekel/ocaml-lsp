@@ -59,10 +59,10 @@ let%expect_test "can format part of an ocaml impl file" =
     {|
     [
       {
-        "newText": "    match (a, b) with\n",
+        "newText": "let rec gcd a b =\n    match (a, b) with\n    | 0, n\n    | n, 0 ->\n      n\n    | _, _ -> gcd a (b mod a)",
         "range": {
-          "end": { "character": 0, "line": 3 },
-          "start": { "character": 0, "line": 2 }
+          "end": { "character": 29, "line": 6 },
+          "start": { "character": 2, "line": 1 }
         }
       }
     ]
@@ -122,17 +122,17 @@ rule censor = parse
     {|
     [
       {
-        "newText": "  | \"super secret\"  { print_string\n                        \"redacting input! it's too \\\n                         secretive\";\n                      Censored\n",
+        "newText": "print_string\n                        \"redacting input! it's too \\\n                         secretive\";\n                      Censored",
         "range": {
-          "end": { "character": 0, "line": 6 },
-          "start": { "character": 0, "line": 5 }
+          "end": { "character": 82, "line": 5 },
+          "start": { "character": 22, "line": 5 }
         }
       }
     ]
     |}]
 ;;
 
-let%expect_test "does not format ignored files" =
+let%expect_test "formats selections in ignored files" =
   let source =
     {ocaml|let () =
   let rec gcd a b =
@@ -154,5 +154,15 @@ let%expect_test "does not format ignored files" =
   write_in_file (Filename.concat tmpdir ".ocamlformat-ignore") (name ^ "\n");
   let path = Filename.concat tmpdir name in
   print_formatting source path range;
-  [%expect {| No formatting needed |}]
+  [%expect
+    {|
+    [
+      {
+        "newText": "let rec gcd a b =\n    match (a, b) with\n    | 0, n\n    | n, 0 ->\n      n\n    | _, _ -> gcd a (b mod a)",
+        "range": {
+          "end": { "character": 29, "line": 6 },
+          "start": { "character": 2, "line": 1 }
+        }
+      }
+    ] |}]
 ;;
