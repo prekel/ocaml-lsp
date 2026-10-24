@@ -1,5 +1,6 @@
 # Unreleased (OCaml 4.14)
 
+- Correct the line numbers in related diagnostic locations (backport of #2163).
 - Preserve parentheses around operators in Rename and Prepare Rename, and
   deduplicate edits from parser recovery (backports of #1966 and #2064).
 - Return inlay hints only inside the requested range (backport of #2155).

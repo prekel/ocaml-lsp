@@ -200,11 +200,11 @@ describe("textDocument/diagnostics", () => {
                       "range": Object {
                         "end": Object {
                           "character": 14,
-                          "line": 2,
+                          "line": 1,
                         },
                         "start": Object {
                           "character": 2,
-                          "line": 2,
+                          "line": 1,
                         },
                       },
                       "uri": "file:///test.ml",
@@ -216,11 +216,11 @@ describe("textDocument/diagnostics", () => {
                       "range": Object {
                         "end": Object {
                           "character": 7,
-                          "line": 4,
+                          "line": 3,
                         },
                         "start": Object {
                           "character": 6,
-                          "line": 4,
+                          "line": 3,
                         },
                       },
                       "uri": "file:///test.ml",

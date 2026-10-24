@@ -274,8 +274,8 @@ let extract_related_errors uri raw_message =
                 | None -> 1, 1
                 | Some (x, y) -> x, y
               in
-              ( Position.create ~line:line_start ~character:char_start
-              , Position.create ~line:line_end ~character:char_end )
+              ( Position.create ~line:(line_start - 1) ~character:char_start
+              , Position.create ~line:(line_end - 1) ~character:char_end )
             in
             let range = Range.create ~start ~end_ in
             Location.create ~range ~uri
