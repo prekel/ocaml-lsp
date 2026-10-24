@@ -66,6 +66,15 @@ let overlaps x y =
   | _ -> false
 ;;
 
+let clamp_to_source ({ start; end_ } : t) source =
+  let clamp position =
+    let offset = Msource.get_offset source (Position.logical position) in
+    let (`Logical (line, character)) = Msource.get_logical source offset in
+    Position.create ~line:(line - 1) ~character
+  in
+  { start = clamp start; end_ = clamp end_ }
+;;
+
 let to_string t =
   sprintf
     "((%d, %d), (%d, %d))"

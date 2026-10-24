@@ -1,5 +1,7 @@
 # Unreleased (OCaml 4.14)
 
+- Clamp recovered selection ranges to the source and keep a containing result
+  for each requested position (backports of #2061 and #2170).
 - Backport `textDocument/rangeFormatting` from OCaml-LSP 1.26 (#1591).
 - Explicit selection formatting works even in `.ocamlformat-ignore` files,
   including wildcard exclusions, while retaining the effective project settings.

@@ -1,6 +1,9 @@
 open Import
 include module type of Lsp.Types.Range with type t = Lsp.Types.Range.t
 
+(** Clamp recovered endpoints to positions that exist in [source]. *)
+val clamp_to_source : t -> Msource.t -> t
+
 (** [compare r1 r2] compares first start positions, if equal compares the end
     positions. *)
 val compare : t -> t -> Ordering.t

@@ -412,33 +412,38 @@ let selection_range
       (state : State.t)
       { SelectionRangeParams.textDocument = { uri }; positions; _ }
   =
+  let fallback position =
+    { SelectionRange.range = { start = position; end_ = position }; parent = None }
+  in
   let doc = Document_store.get state.store uri in
   match Document.kind doc with
-  | `Other -> Fiber.return []
+  | `Other -> Fiber.return (List.map positions ~f:fallback)
   | `Merlin merlin ->
-    let selection_range_of_enclosings (enclosings : Warnings.loc list)
-      : SelectionRange.t option
-      =
-      let ranges_of_enclosing parent (enclosing : Warnings.loc) =
-        let range = Range.of_loc enclosing in
-        { SelectionRange.range; parent }
+    let source = Document.Merlin.source merlin in
+    let of_enclosings position enclosings =
+      List.filter_map enclosings ~f:(fun enclosing ->
+        let open Option.O in
+        let* range = Range.of_loc_opt enclosing in
+        let range = Range.clamp_to_source range source in
+        if Range.contains range { start = position; end_ = position }
+        then Some range
+        else None)
+      |> List.rev
+      |> List.fold_left ~init:None ~f:(fun parent range ->
+        match parent with
+        | Some (previous : SelectionRange.t)
+          when not (Range.contains previous.range range) -> parent
+        | _ -> Some { SelectionRange.range; parent })
+      |> Option.value ~default:(fallback position)
+    in
+    Fiber.sequential_map positions ~f:(fun position ->
+      let+ enclosings =
+        Document.Merlin.dispatch_exn
+          ~name:"shape"
+          merlin
+          (Enclosing (Position.logical position))
       in
-      List.fold_left
-        ~f:(fun parent enclosing -> Some (ranges_of_enclosing parent enclosing))
-        ~init:None
-      @@ List.rev enclosings
-    in
-    let+ ranges =
-      Fiber.sequential_map positions ~f:(fun x ->
-        let+ enclosings =
-          Document.Merlin.dispatch_exn
-            ~name:"shape"
-            merlin
-            (Enclosing (Position.logical x))
-        in
-        selection_range_of_enclosings enclosings)
-    in
-    List.filter_opt ranges
+      of_enclosings position enclosings)
 ;;
 
 let references
