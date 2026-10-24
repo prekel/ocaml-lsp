@@ -1,81 +1,109 @@
 open Import
+open Option.O
 
 let action_kind = "combine-cases"
 let kind = CodeActionKind.Other action_kind
 
 let select_complete_lines (range : Range.t) =
   if range.start.line = range.end_.line
-  then None
+  then range
   else (
     let start = { range.start with character = 0 } in
-    match range.end_.character with
-    | 0 -> Some { range with start }
-    | _ ->
-      let end_ = Position.{ line = range.end_.line + 1; character = 0 } in
-      Some (Range.create ~start ~end_))
+    let end_ =
+      if range.end_.character = 0
+      then range.end_
+      else Position.{ line = range.end_.line + 1; character = 0 }
+    in
+    Range.create ~start ~end_)
 ;;
 
-let split_cases code =
-  let lines = String.split code ~on:'\n' in
-  let case_regex = Re.Perl.re {|^\s*\|.*->|} |> Re.compile in
-  let drop_from_lines lines regex =
-    List.map lines ~f:(Re.replace_string (Re.compile regex) ~by:"")
+let case_loc (case : Parsetree.case) = Loc.union case.pc_lhs.ppat_loc case.pc_rhs.pexp_loc
+
+let binds_variables pattern =
+  let module I = Ast_iterator in
+  let bound = ref false in
+  let pat iter (p : Parsetree.pattern) =
+    (match p.ppat_desc with
+     | Ppat_var _ | Ppat_alias _ | Ppat_unpack _ -> bound := true
+     | _ -> ());
+    I.default_iterator.pat iter p
   in
-  match List.for_all ~f:(Re.execp case_regex) lines with
-  | false -> None
-  | true ->
-    let without_pipes = drop_from_lines lines (Re.Perl.re {|\s*\|\s*|}) in
-    let lhs_patterns = drop_from_lines without_pipes (Re.Perl.re {|\s*->.*$|}) in
-    let rhs_expressions = drop_from_lines without_pipes (Re.Perl.re {|^.*->\s*|}) in
-    Some (lhs_patterns, rhs_expressions)
+  let iter = { I.default_iterator with pat } in
+  iter.pat iter pattern;
+  !bound
 ;;
 
-let pick_rhs rhs_expressions =
-  let distinct_nonempty =
-    List.map rhs_expressions ~f:String.strip
-    |> List.filter ~f:(fun s -> (not (String.is_empty s)) && not (String.equal s "_"))
-    |> Base.List.dedup_and_sort ~compare:Base.String.compare
-  in
-  match distinct_nonempty with
-  | [ expr ] -> expr
-  | _ -> "_"
+let same_body a b =
+  let module M = Ocaml_parsing.Ast_mapper in
+  let mapper = { M.default_mapper with location = (fun _ _ -> Loc.none) } in
+  Poly.equal (mapper.expr mapper a) (mapper.expr mapper b)
 ;;
 
-let make_text_edit ~range ~newText ~doc ~uri =
-  let text_edit = TextEdit.create ~range ~newText in
-  let version = Document.version doc in
-  let textDocument = OptionalVersionedTextDocumentIdentifier.create ~uri ~version () in
-  let edit = TextDocumentEdit.create ~textDocument ~edits:[ `TextEdit text_edit ] in
-  WorkspaceEdit.create ~documentChanges:[ `TextDocumentEdit edit ] ()
-;;
-
-let code_action doc params =
-  match Document.kind doc with
-  | `Other -> Fiber.return None
-  | `Merlin merlin ->
-    (match Document.Merlin.kind merlin with
-     | Intf -> Fiber.return None
-     | Impl ->
-       let result =
-         let open Option.O in
-         let* range = select_complete_lines params.CodeActionParams.range in
-         let* code = Document.substring doc range in
-         let code = String.strip ~drop:(fun c -> Char.equal c '\n') code in
-         let* lhs_patterns, rhs_expressions = split_cases code in
-         let+ i = Base.String.index code '|' in
-         let indent = String.sub code ~pos:0 ~len:i in
-         let lhs = String.concat ~sep:" | " lhs_patterns in
-         let rhs = pick_rhs rhs_expressions in
-         let newText = indent ^ "| " ^ lhs ^ " -> " ^ rhs ^ "\n" in
-         let edit = make_text_edit ~range ~newText ~doc ~uri:params.textDocument.uri in
-         CodeAction.create
-           ~title:(String.capitalize action_kind)
-           ~kind
-           ~edit
-           ~isPreferred:false
-           ()
+let code_action pipeline doc (params : CodeActionParams.t) =
+  let range = select_complete_lines params.range in
+  let candidates = ref [] in
+  let expr iter (e : Parsetree.expression) =
+    (match e.pexp_desc with
+     | Pexp_match (_, cases) | Pexp_function cases ->
+       let selected =
+         List.filter cases ~f:(fun c -> Range.contains range (Range.of_loc (case_loc c)))
        in
-       Fiber.return result)
+       if List.length selected >= 2 then candidates := selected :: !candidates
+     | _ -> ());
+    Ast_iterator.default_iterator.expr iter e
+  in
+  let iter = { Ast_iterator.default_iterator with expr } in
+  (match Mpipeline.reader_parsetree pipeline with
+   | `Interface _ -> ()
+   | `Implementation s -> iter.structure iter s);
+  let* cases =
+    match !candidates with
+    | [ cases ] -> Some cases
+    | _ -> None
+  in
+  let* first = List.hd cases in
+  let* last = Base.List.last cases in
+  let disabled reason = Some (Code_action.disabled ~kind ~title:"Combine-cases" reason) in
+  if
+    List.exists cases ~f:(fun c ->
+      Option.is_some c.Parsetree.pc_guard || binds_variables c.pc_lhs)
+  then disabled "Combining guarded or variable-binding patterns is not supported"
+  else if not (List.for_all cases ~f:(fun c -> same_body first.pc_rhs c.Parsetree.pc_rhs))
+  then disabled "Only cases with identical bodies can be combined"
+  else if Code_action.has_comments pipeline range
+  then disabled "Combining these cases would discard comments"
+  else (
+    let first_range = Range.of_loc first.pc_lhs.ppat_loc in
+    let last_range = Range.of_loc last.pc_rhs.pexp_loc in
+    let* prefix =
+      Document.substring doc (Range.create ~start:range.start ~end_:first_range.start)
+    in
+    let* suffix =
+      Document.substring doc (Range.create ~start:last_range.end_ ~end_:range.end_)
+    in
+    let only_space s = String.is_empty (String.strip s) in
+    let prefix_without_pipe = Base.String.filter prefix ~f:(fun c -> c <> '|') in
+    if not (only_space prefix_without_pipe && only_space suffix)
+    then disabled "Select complete adjacent cases from a single match"
+    else
+      let* patterns =
+        List.map cases ~f:(fun c ->
+          Document.substring doc (Range.of_loc c.Parsetree.pc_lhs.ppat_loc))
+        |> Option.List.all
+      in
+      let* body = Document.substring doc (Range.of_loc first.pc_rhs.pexp_loc) in
+      let rec indent_length i =
+        if i < String.length prefix && (prefix.[i] = ' ' || prefix.[i] = '\t')
+        then indent_length (i + 1)
+        else i
+      in
+      let indent = String.sub prefix ~pos:0 ~len:(indent_length 0) in
+      let newline = if String.is_empty suffix then "" else suffix in
+      let newText =
+        indent ^ "| " ^ String.concat ~sep:" | " patterns ^ " -> " ^ body ^ newline
+      in
+      let edit = Document.edit doc [ TextEdit.create ~range ~newText ] in
+      Some (CodeAction.create ~title:"Combine-cases" ~kind ~edit ~isPreferred:false ()))
 ;;
 
-let t = { Code_action.kind; run = `Non_batchable code_action }
+let t = Code_action.batchable kind code_action

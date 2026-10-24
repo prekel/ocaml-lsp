@@ -266,6 +266,82 @@ let bad = let y = 2 in f 1
   [%expect {| unavailable |}]
 ;;
 
+let%expect_test "combining lambda bodies preserves their arrows" =
+  preserves_runtime
+    "Combine-cases"
+    {|
+type t = A | B
+let f = function
+$| A -> (fun x -> x)
+| B -> (fun x -> x)$
+let () = assert (f A 3 = 3 && f B 4 = 4)
+|};
+  [%expect {| preserved |}]
+;;
+
+let%expect_test "combining multiline bodies preserves strings containing arrows" =
+  preserves_runtime
+    "Combine-cases"
+    {|
+type t = A | B
+let f = function
+$| A -> let x = "a -> b" in
+       x
+| B -> let x = "a -> b" in
+       x$
+let () = assert (f A = "a -> b" && f B = "a -> b")
+|};
+  [%expect {| preserved |}]
+;;
+
+let%expect_test "combining cases refuses different bodies" =
+  unavailable
+    "Combine-cases"
+    {|
+type t = A | B
+let f = function
+$| A -> 1
+| B -> 2$
+|};
+  [%expect {| unavailable |}]
+;;
+
+let%expect_test "combining cases refuses bound variables" =
+  unavailable
+    "Combine-cases"
+    {|
+type t = A of int | B of int
+let f = function
+$| A x -> x
+| B x -> x$
+|};
+  [%expect {| unavailable |}]
+;;
+
+let%expect_test "combining cases refuses guards" =
+  unavailable
+    "Combine-cases"
+    {|
+type t = A | B
+let f = function
+$| A when true -> 1
+| B -> 1$
+|};
+  [%expect {| unavailable |}]
+;;
+
+let%expect_test "combining cases preserves comments by refusing the edit" =
+  unavailable
+    "Combine-cases"
+    {|
+type t = A | B
+let f = function
+$| A -> (* keep this *) 1
+| B -> 1$
+|};
+  [%expect {| unavailable |}]
+;;
+
 let%expect_test "unsafe actions explain refusal to supporting clients" =
   let source, range =
     Code_actions.parse_selection "let f () = let $x = ref 0 in incr x; !x"

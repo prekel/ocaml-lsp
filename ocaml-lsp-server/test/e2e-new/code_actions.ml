@@ -1729,7 +1729,7 @@ let%expect_test "shouldn't find the jump target on the same line" =
       No code actions |}]
 ;;
 
-let%expect_test "can combine cases with multiple RHSes" =
+let%expect_test "does not combine cases with different bodies" =
   let source =
     {ocaml|
     match card with
@@ -1748,32 +1748,11 @@ let%expect_test "can combine cases with multiple RHSes" =
   print_code_actions source range ~filter:(find_action "combine-cases");
   [%expect
     {|
-    Code actions:
-    {
-      "edit": {
-        "documentChanges": [
-          {
-            "edits": [
-              {
-                "newText": "    | King | Queen | Jack | Number _ -> _\n",
-                "range": {
-                  "end": { "character": 0, "line": 7 },
-                  "start": { "character": 0, "line": 3 }
-                }
-              }
-            ],
-            "textDocument": { "uri": "file:///foo.ml", "version": 0 }
-          }
-        ]
-      },
-      "isPreferred": false,
-      "kind": "combine-cases",
-      "title": "Combine-cases"
-    }
+    No code actions
     |}]
 ;;
 
-let%expect_test "can combine cases with one unique RHS" =
+let%expect_test "does not combine a hole with a different body" =
   let source =
     {ocaml|
     match card with
@@ -1792,28 +1771,7 @@ let%expect_test "can combine cases with one unique RHS" =
   print_code_actions source range ~filter:(find_action "combine-cases");
   [%expect
     {|
-    Code actions:
-    {
-      "edit": {
-        "documentChanges": [
-          {
-            "edits": [
-              {
-                "newText": "    | King | Queen -> \"Face card!\"\n",
-                "range": {
-                  "end": { "character": 0, "line": 5 },
-                  "start": { "character": 0, "line": 3 }
-                }
-              }
-            ],
-            "textDocument": { "uri": "file:///foo.ml", "version": 0 }
-          }
-        ]
-      },
-      "isPreferred": false,
-      "kind": "combine-cases",
-      "title": "Combine-cases"
-    }
+    No code actions
     |}]
 ;;
 
