@@ -43,6 +43,48 @@ describe("textDocument/rename", () => {
     await LanguageServer.exit(languageServer);
   });
 
+  it.each([0, 1, 2])(
+    "renames an operator from line %i while preserving its parentheses",
+    async (line) => {
+      languageServer = await LanguageServer.startAndInitialize();
+      const lines = [
+        "let ( ++ ) a b = a + b",
+        "let result = ( ++ ) 1 2",
+        "let other = 1 ++ 2",
+      ];
+      const source = lines.join("\n");
+      openDocument(source);
+      const column = lines[line].indexOf("++");
+      const position = Types.Position.create(line, column);
+      expect(await query_prepare(position)).toEqual(
+        Types.Range.create(line, column, line, column + 2),
+      );
+      const result = await query(position, "**");
+      const edits = result?.changes?.["file:///test.ml"] ?? [];
+      expect(edits).toHaveLength(3);
+      for (const edit of edits) {
+        expect(edit.range.end.line).toBe(edit.range.start.line);
+        expect(edit.range.end.character - edit.range.start.character).toBe(2);
+        const { line: editLine, character } = edit.range.start;
+        lines[editLine] =
+          lines[editLine].slice(0, character) +
+          edit.newText +
+          lines[editLine].slice(edit.range.end.character);
+      }
+      expect(lines.join("\n")).toBe(source.replace(/\+\+/g, "**"));
+    },
+  );
+
+  it("renames a completed binding before an incomplete one", async () => {
+    languageServer = await LanguageServer.startAndInitialize();
+    openDocument("let rec ma x = ma x\nlet broken =");
+    const result = await query(Types.Position.create(0, 9), "renamed");
+    expect(result?.changes?.["file:///test.ml"]).toEqual([
+      Types.TextEdit.replace(Types.Range.create(0, 8, 0, 10), "renamed"),
+      Types.TextEdit.replace(Types.Range.create(0, 15, 0, 17), "renamed"),
+    ]);
+  });
+
   it("can reject invalid rename request", async () => {
     languageServer = await LanguageServer.startAndInitialize({
       capabilities: {

@@ -1,5 +1,7 @@
 # Unreleased (OCaml 4.14)
 
+- Preserve parentheses around operators in Rename and Prepare Rename, and
+  deduplicate edits from parser recovery (backports of #1966 and #2064).
 - Return inlay hints only inside the requested range (backport of #2155).
 - Clamp recovered selection ranges to the source and keep a containing result
   for each requested position (backports of #2061 and #2170).

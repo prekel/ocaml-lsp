@@ -661,26 +661,7 @@ let on_request
   | TextDocumentTypeDefinition { textDocument = { uri }; position; _ } ->
     later (fun state () -> Definition_query.run `Type_definition state uri position) ()
   | TextDocumentCompletion params -> later (fun _ () -> Compl.complete state params) ()
-  | TextDocumentPrepareRename { textDocument = { uri }; position; workDoneToken = _ } ->
-    later
-      (fun _ () ->
-         let doc = Document_store.get store uri in
-         match Document.kind doc with
-         | `Other -> Fiber.return None
-         | `Merlin doc ->
-           let+ locs, _status =
-             Document.Merlin.dispatch_exn
-               ~name:"occurrences"
-               doc
-               (Occurrences (`Ident_at (Position.logical position), `Buffer))
-           in
-           let loc =
-             List.find_opt locs ~f:(fun loc ->
-               let range = Range.of_loc loc in
-               Position.compare_inclusion position range = `Inside)
-           in
-           Option.map loc ~f:Range.of_loc)
-      ()
+  | TextDocumentPrepareRename req -> later Rename.prepare req
   | TextDocumentRename req -> later Rename.rename req
   | TextDocumentFoldingRange req -> later Folding_range.compute req
   | SignatureHelp req -> later Signature_help.run req
