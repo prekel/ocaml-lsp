@@ -51,10 +51,10 @@ possible and does not make any assumptions about IO.
   (jsonrpc (= :version))
   (re (>= 1.5.0))
   (ppx_yojson_conv_lib (>= "v0.14"))
-  (dune-rpc (>= 3.4.0))
+  (dune-rpc (and (>= 3.4.0) (< 3.22)))
   (chrome-trace (>= 3.3.0))
   dyn
-  stdune
+  (stdune (< 3.22))
   (fiber (and (>= 3.1.1) (< 4.0.0)))
   (ocaml (and (>= 4.14.0) (< 5.0)))
   xdg
@@ -70,7 +70,7 @@ possible and does not make any assumptions about IO.
   (csexp (>= 1.5))
   (ocamlformat-rpc-lib (>= 0.21.0))
   (odoc :with-doc)
-  (merlin-lib (and (>= 4.18) (< 5.0)))
+  (merlin-lib (and (>= 4.19) (< 5.0)))
   (ppx_yojson_conv :with-dev-setup)))
 
 (package

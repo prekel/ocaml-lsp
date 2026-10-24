@@ -1,3 +1,21 @@
+# Unreleased (OCaml 4.14)
+
+- Respect the complete selection when adding and removing type annotations, and
+  preserve nested annotations when removing an outer constraint.
+- Generate collision-free extraction names and deduplicate extracted parameters.
+  Keep local extraction inside control-flow and lazy evaluation boundaries;
+  decline extraction across effectful siblings or unavailable names and types.
+- Restrict inlining to immediate values, immutable aliases, and direct fully
+  applied unlabelled functions. Preserve argument evaluation instead of beta
+  reducing calls, and decline unsafe transformations as a whole.
+- Combine adjacent cases using the AST and preserve their original bodies.
+  Decline differing bodies, guards, binding patterns, and comments instead of
+  producing incomplete or invalid code.
+- Explain unsupported refactorings with disabled code actions when the client
+  supports them; otherwise omit the action.
+- Keep local development dependencies within the OCaml 4.14 release bounds:
+  Merlin 4.19 and Dune RPC/Stdune older than 3.22.
+
 # 1.21.0
 
 ## Features

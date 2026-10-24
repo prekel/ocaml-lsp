@@ -9,3 +9,6 @@ tmp/
 *.install
 *.log
 result
+
+compile_commands.json
+node_modules/
