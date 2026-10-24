@@ -2,27 +2,45 @@ open Import
 
 let action_kind = "remove type annotation"
 
-let check_typeable_context pipeline pos_start =
-  let pos_start = Mpipeline.get_lexing_pos pipeline pos_start in
-  let typer = Mpipeline.typer_result pipeline in
-  let browse = Mbrowse.of_typedtree (Mtyper.get_typedtree typer) in
+let check_typeable_context pipeline (range : Range.t) =
   let is_exp_constrained = function
-    | Typedtree.Texp_constraint _, loc, _ -> Some loc
-    | Typedtree.Texp_coerce (Some { ctyp_loc; _ }, _), _, _ -> Some ctyp_loc
+    | Typedtree.Texp_constraint _, loc, _ -> Some (loc, loc)
+    | Typedtree.Texp_coerce (Some { ctyp_loc; _ }, _), loc, _ -> Some (loc, ctyp_loc)
     | _ -> None
   in
   let is_pat_constrained = function
-    | Typedtree.Tpat_constraint _, loc, _ -> Some loc
+    | Typedtree.Tpat_constraint _, loc, _ -> Some (loc, loc)
     | _ -> None
   in
-  let is_valid loc p extras =
-    (* Constrains are listed from the farthest to the closest. We search
-       reversed list to find the closest type annotation to remove. *)
-    match extras |> List.rev |> List.find_map ~f:p with
-    | Some x -> `Valid (loc, x)
-    | None -> `Invalid
+  let contains outer inner =
+    match Range.of_loc_opt outer, Range.of_loc_opt inner with
+    | Some outer, Some inner -> Range.contains outer inner
+    | _ -> false
   in
-  match Mbrowse.enclosing pos_start [ browse ] with
+  let is_valid loc p extras =
+    let candidates = List.filter_map extras ~f:p in
+    let cursor_only = Position.compare range.start range.end_ = Ordering.Eq in
+    let chosen =
+      List.rev candidates
+      |> List.find ~f:(fun (cover, _) ->
+        cursor_only
+        || Option.exists (Range.of_loc_opt cover) ~f:(fun outer ->
+          Range.contains outer range))
+    in
+    match chosen with
+    | None -> `Invalid
+    | Some (cover, edit_loc) ->
+      let edit_loc = Loc.union loc edit_loc in
+      let retained =
+        List.find_map candidates ~f:(fun (inner, _) ->
+          Option.some_if
+            (Loc.compare cover inner <> 0 && contains edit_loc inner && contains inner loc)
+            inner)
+        |> Option.value ~default:loc
+      in
+      `Valid (retained, edit_loc)
+  in
+  match Code_action.enclosing_nodes pipeline range with
   | (_, Pattern { pat_desc = Tpat_var _; _ })
     :: (_, Value_binding { vb_expr = { exp_desc = Texp_function _; _ }; _ })
     :: _ -> `Invalid
@@ -66,8 +84,7 @@ let code_action_of_type_enclosing uri doc (loc, constr_loc) =
 ;;
 
 let code_action pipeline doc (params : CodeActionParams.t) =
-  let pos_start = Position.logical params.range.start in
-  let context = check_typeable_context pipeline pos_start in
+  let context = check_typeable_context pipeline params.range in
   match context with
   | `Invalid -> None
   | `Valid (loc1, loc2) ->

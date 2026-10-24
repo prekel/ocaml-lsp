@@ -3,21 +3,7 @@ open Import
 let action_kind = "type-annotate"
 
 let check_typeable_context pipeline (range : Range.t) =
-  let pos_start = Mpipeline.get_lexing_pos pipeline (Position.logical range.start) in
-  let typer = Mpipeline.typer_result pipeline in
-  let browse = Mbrowse.of_typedtree (Mtyper.get_typedtree typer) in
-  let nodes = Mbrowse.enclosing pos_start [ browse ] in
-  let nodes =
-    if Position.compare range.start range.end_ = Ordering.Eq
-    then nodes
-    else
-      List.filter nodes ~f:(fun (_, node) ->
-        (* Unlike [node_loc], this includes type constraints and coercions, so
-           selecting an annotated node does not select its parent instead. *)
-        Option.exists
-          (Range.of_loc_opt (Browse_raw.node_merlin_loc (Mbrowse.node_loc node) node))
-          ~f:(fun outer -> Range.contains outer range))
-  in
+  let nodes = Code_action.enclosing_nodes pipeline range in
   let is_exp_constrained = function
     | Typedtree.Texp_constraint _, _, _ -> true
     | Typedtree.Texp_coerce (Some _, _), _, _ -> true

@@ -342,6 +342,8 @@ $| A -> (* keep this *) 1
   [%expect {| unavailable |}]
 ;;
 
+let remove = Code_actions.code_action_test ~title:"Remove type annotation"
+
 let%expect_test "unsafe actions explain refusal to supporting clients" =
   let source, range =
     Code_actions.parse_selection "let f () = let $x = ref 0 in incr x; !x"
@@ -363,3 +365,22 @@ let%expect_test "unsafe actions explain refusal to supporting clients" =
   [%expect {| Inlining would repeat evaluation or allocation of the binding |}]
 ;;
 
+let%expect_test "remove annotation selects the outer expression" =
+  remove {|let f x = $((x : int) + 1 : int)$|};
+  [%expect {| let f x = (x : int) + 1 |}]
+;;
+
+let%expect_test "remove annotation preserves nested constraints" =
+  remove {|let f x = $((x : int) : int)$|};
+  [%expect {| let f x = (x : int) |}]
+;;
+
+let%expect_test "remove annotation selects only the inner constraint" =
+  remove {|let f x = ($(x : int)$ : int)|};
+  [%expect {| let f x = (x : int) |}]
+;;
+
+let%expect_test "remove annotation preserves the selected coercion" =
+  remove {|let x = $(7 : int :> int)$|};
+  [%expect {| let x = (7 :> int) |}]
+;;
