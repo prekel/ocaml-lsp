@@ -1,13 +1,13 @@
 open Test.Import
 open Lsp_helpers
 
-let iter_code_actions ?prep ?path ?(diagnostics = []) ~source range =
+let iter_code_actions ?prep ?path ?capabilities ?(diagnostics = []) ~source range =
   let makeRequest textDocument =
     let context = CodeActionContext.create ~diagnostics () in
     Lsp.Client_request.CodeAction
       (CodeActionParams.create ~textDocument ~range ~context ())
   in
-  iter_lsp_response ?prep ?path ~makeRequest ~source
+  iter_lsp_response ?prep ?path ?capabilities ~makeRequest ~source
 ;;
 
 let print_code_actions

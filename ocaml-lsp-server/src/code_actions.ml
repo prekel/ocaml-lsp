@@ -104,7 +104,21 @@ let compute server (params : CodeActionParams.t) =
     Document_store.get_opt store uri
   in
   let dune_actions = Dune.code_actions (State.dune state) params.textDocument.uri in
-  let actions = function
+  let supports_disabled =
+    let open Option.O in
+    Option.value
+      ~default:false
+      (let* text_document = (State.client_capabilities state).textDocument in
+       let* code_action = text_document.codeAction in
+       code_action.disabledSupport)
+  in
+  let actions xs =
+    let xs =
+      if supports_disabled
+      then xs
+      else List.filter xs ~f:(fun (a : CodeAction.t) -> Option.is_none a.disabled)
+    in
+    match xs with
     | [] -> None
     | xs -> Some (List.map ~f:(fun a -> `CodeAction a) xs)
   in

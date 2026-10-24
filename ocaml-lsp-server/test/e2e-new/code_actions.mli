@@ -3,6 +3,7 @@ open Test.Import
 val iter_code_actions
   :  ?prep:(unit Test.Import.Client.t -> unit Fiber.t)
   -> ?path:string
+  -> ?capabilities:ClientCapabilities.t
   -> ?diagnostics:Diagnostic.t list
   -> source:string
   -> Range.t

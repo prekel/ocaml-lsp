@@ -50,6 +50,7 @@ let open_document_with_client ~prep ~path ~source client =
 let iter_lsp_response
       ?(prep = fun _ -> Fiber.return ())
       ?(path = "foo.ml")
+      ?capabilities:client_capabilities
       ~makeRequest
       ~source
       k
@@ -76,6 +77,7 @@ let iter_lsp_response
       in
       ClientCapabilities.create ~window ()
     in
+    let capabilities = Option.value ~default:capabilities client_capabilities in
     Client.start client (InitializeParams.create ~capabilities ())
   in
   let run =

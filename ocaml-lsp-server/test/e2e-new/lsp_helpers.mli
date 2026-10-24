@@ -16,6 +16,7 @@ val open_document
 val iter_lsp_response
   :  ?prep:(unit Client.t -> unit Fiber.t)
   -> ?path:string
+  -> ?capabilities:ClientCapabilities.t
   -> makeRequest:(TextDocumentIdentifier.t -> 'a Client.out_request)
   -> source:string
   -> ('a -> unit)
