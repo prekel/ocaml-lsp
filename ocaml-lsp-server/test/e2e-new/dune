@@ -45,6 +45,7 @@
     action_mark_remove
     code_actions
     code_actions_annotations
+    code_action_safety
     completion
     completions
     construct

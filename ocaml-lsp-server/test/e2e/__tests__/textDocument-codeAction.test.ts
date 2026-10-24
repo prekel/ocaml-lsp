@@ -183,21 +183,8 @@ let x = _
               Object {
                 "edits": Array [
                   Object {
-                    "newText": "let var_name = _ in
-      ",
-                    "range": Object {
-                      "end": Object {
-                        "character": 8,
-                        "line": 0,
-                      },
-                      "start": Object {
-                        "character": 8,
-                        "line": 0,
-                      },
-                    },
-                  },
-                  Object {
-                    "newText": "var_name",
+                    "newText": "(let var_name = _ in
+      var_name)",
                     "range": Object {
                       "end": Object {
                         "character": 9,

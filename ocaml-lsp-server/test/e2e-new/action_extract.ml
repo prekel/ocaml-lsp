@@ -10,8 +10,8 @@ let f =
   [%expect
     {|
     let f =
-      let var_name = 1 in
-    0 + var_name |}]
+      (let var_name = 1 in
+    0 + var_name) |}]
 ;;
 
 let%expect_test "extract local expression" =
@@ -25,8 +25,8 @@ let f =
     {|
     let f =
       let x = 2 in
-      let var_name = 0 + 1 + x in
-    var_name + 1 |}]
+      (let var_name = 0 + 1 + x in
+    var_name + 1) |}]
 ;;
 
 let%expect_test "extract function single parameter" =
@@ -71,21 +71,14 @@ let f x =
   [%expect {||}]
 ;;
 
-(* TODO: This extraction shouldn't be allowed. *)
-let%expect_test "extract function with local exception" =
+let%expect_test "does not extract an unavailable local exception" =
   extract_function_test
     {|
 let f x =
   let exception Local in
   $raise Local$
 |};
-  [%expect
-    {|
-    let fun_name () = raise Local
-
-    let f x =
-      let exception Local in
-      fun_name () |}]
+  [%expect {| |}]
 ;;
 
 let%expect_test "extract function with shadowed parameter" =
