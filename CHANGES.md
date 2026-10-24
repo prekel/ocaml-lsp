@@ -1,5 +1,7 @@
 # Unreleased (OCaml 4.14)
 
+- Keep Hover working when ocamlformat-rpc dies during startup (backport of
+  upstream f6aee54d).
 - Correct the line numbers in related diagnostic locations (backport of #2163).
 - Preserve parentheses around operators in Rename and Prepare Rename, and
   deduplicate edits from parser recovery (backports of #1966 and #2064).
