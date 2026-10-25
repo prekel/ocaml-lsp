@@ -236,7 +236,7 @@ maybeDescribe("installed library sources", () => {
       },
     );
     expect(JSON.stringify(definition)).toContain(
-      URI.file(path.join(stdune, "code_error.mli")).toString(),
+      URI.file(path.join(stdune, "code_error.ml")).toString(),
     );
   });
 

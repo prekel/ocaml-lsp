@@ -29,19 +29,13 @@ let run kind (state : State.t) uri position =
     let pos = Position.logical position in
     let command, name =
       match kind with
-      | `Definition -> Query_protocol.Locate (None, `MLI, pos), "definition"
+      | `Definition -> Query_protocol.Locate (None, `ML, pos), "definition"
       | `Declaration -> Query_protocol.Locate (None, `MLI, pos), "declaration"
       | `Type_definition -> Query_protocol.Locate_type pos, "type definition"
     in
     let* result =
       Document.Merlin.with_pipeline_exn ~name doc (fun pipeline ->
-        match kind, Query_commands.dispatch pipeline command with
-        | `Definition, (`Not_found _ | `File_not_found _) ->
-          (* Prefer the public interface, but keep implementations reachable
-             when its source or declaration is unavailable. Both searches use
-             the same document snapshot and typing environment. *)
-          Query_commands.dispatch pipeline (Query_protocol.Locate (None, `ML, pos))
-        | _, result -> result)
+        Query_commands.dispatch pipeline command)
     in
     let* range =
       match result with

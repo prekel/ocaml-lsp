@@ -17,7 +17,7 @@ const sources: Record<string, string> = {
     "module Alias = Lib\nlet result = Lib.exported 1\nlet alias = Alias.exported 2\nlet plain = Plain.value\nlet constructor = Lib.Constructor 1\n",
 };
 
-describe("definition prefers interfaces", () => {
+describe("definition and declaration navigation", () => {
   let directory: string;
   let server: LanguageServer.LanguageServer;
   let documents: Map<string, string>;
@@ -84,17 +84,17 @@ describe("definition prefers interfaces", () => {
     return result === null ? [] : Array.isArray(result) ? result : [result];
   }
 
-  it("prefers the interface and uses its declaration position", async () => {
+  it("finds the implementation and uses its definition position", async () => {
     const result = await query("main.ml", "Lib.exported", 5);
     expect(result).toHaveLength(1);
-    expect(result[0].uri).toBe(uri("lib.mli"));
-    expect(result[0].range.start).toEqual(Types.Position.create(5, 0));
+    expect(result[0].uri).toBe(uri("lib.ml"));
+    expect(result[0].range.start).toEqual(Types.Position.create(2, 4));
   });
 
-  it("follows module aliases to the interface", async () => {
+  it("follows module aliases to the implementation", async () => {
     const result = await query("main.ml", "Alias.exported", 7);
-    expect(result.map((location) => location.uri)).toEqual([uri("lib.mli")]);
-    expect(result[0].range.start.line).toBe(5);
+    expect(result.map((location) => location.uri)).toEqual([uri("lib.ml")]);
+    expect(result[0].range.start.line).toBe(2);
   });
 
   it("uses the implementation when a module has no interface", async () => {
@@ -132,16 +132,21 @@ describe("definition prefers interfaces", () => {
       textDocument: { uri: uri("lib.mli"), version: 1 },
       contentChanges: [{ text }],
     });
-    const result = await query("main.ml", "Lib.exported", 5);
+    const result = await query(
+      "main.ml",
+      "Lib.exported",
+      5,
+      "textDocument/declaration",
+    );
     expect(result).toEqual([
       Types.Location.create(uri("lib.mli"), Types.Range.create(5, 4, 5, 12)),
     ]);
   });
 
-  it("prefers interface declarations for constructors", async () => {
+  it("finds implementation declarations for constructors", async () => {
     const result = await query("main.ml", "Lib.Constructor", 6);
-    expect(result.map((location) => location.uri)).toEqual([uri("lib.mli")]);
-    expect(result[0].range.start.line).toBe(1);
+    expect(result.map((location) => location.uri)).toEqual([uri("lib.ml")]);
+    expect(result[0].range.start.line).toBe(0);
   });
 
   it("keeps the declaration request directed at the interface", async () => {
