@@ -238,6 +238,19 @@ maybeDescribe("installed library sources", () => {
     expect(JSON.stringify(definition)).toContain(
       URI.file(path.join(stdune, "code_error.ml")).toString(),
     );
+    const implementation = await server.sendRequest(
+      "textDocument/implementation",
+      {
+        textDocument: { uri },
+        position: Types.Position.create(
+          lines.length - 1,
+          lines[lines.length - 1].length,
+        ),
+      },
+    );
+    expect(JSON.stringify(implementation)).toContain(
+      URI.file(path.join(stdune, "code_error.ml")).toString(),
+    );
   });
 
   it("configures installed interfaces", async () => {
