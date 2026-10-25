@@ -11,10 +11,13 @@ opens, and dependencies. Dependencies are matched by interface digest inside
 the installation being browsed, so the original build tree is not required.
 
 Semantic highlighting remains available, along with hover and navigation where
-the installed artifacts provide enough information. Without compatible
-annotations, the server uses the source directory and the standard library.
-Build-time preprocessors are not rerun; features requiring unavailable PPX
-expansions or private modules may therefore be incomplete.
+the installed artifacts provide enough information. Go to Definition prefers
+declarations in `.mli` files, with a fallback to `.ml` when the interface target
+is unavailable. This preference also applies to files in the project.
+
+Without compatible annotations, the server uses the source directory and the
+standard library. Build-time preprocessors are not rerun; features requiring
+unavailable PPX expansions or private modules may therefore be incomplete.
 
 The server does not publish diagnostics for installed sources, including
 unsaved edits to those buffers. This browsing behavior does not make the file

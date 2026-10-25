@@ -114,6 +114,10 @@ let definition_range pipeline position ~type_definition ~source_position =
     | Some _ -> name
     | None ->
       (match node.t_node with
+       | Browse_raw.Value_description d
+         when d.val_loc.loc_start.pos_cnum = position.pos_cnum ->
+         (* Interface lookup can point at [val], rather than its name. *)
+         Some d.val_name.loc
        | Browse_raw.Type_declaration d
          when d.typ_loc.loc_start.pos_cnum = position.pos_cnum ->
          if type_definition

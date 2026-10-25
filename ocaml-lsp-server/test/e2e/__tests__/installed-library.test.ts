@@ -223,6 +223,21 @@ maybeDescribe("installed library sources", () => {
     expect(settings.ocaml.open_modules).toContain("Stdune__");
     expect(settings.merlin.failures).toEqual([]);
     expect(await hover(uri, text, "Code_error.raise")).not.toBeNull();
+    const offset = text.indexOf("Code_error.raise") + "Code_error.".length;
+    const lines = text.slice(0, offset).split("\n");
+    const definition = await server.sendRequest(
+      Protocol.DefinitionRequest.type,
+      {
+        textDocument: { uri },
+        position: Types.Position.create(
+          lines.length - 1,
+          lines[lines.length - 1].length,
+        ),
+      },
+    );
+    expect(JSON.stringify(definition)).toContain(
+      URI.file(path.join(stdune, "code_error.mli")).toString(),
+    );
   });
 
   it("configures installed interfaces", async () => {

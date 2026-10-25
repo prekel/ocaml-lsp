@@ -1,5 +1,9 @@
 # Unreleased (OCaml 4.14)
 
+- Prefer `.mli` declarations for Go to Definition in projects and installed
+  libraries, falling back to `.ml` when the interface target is unavailable.
+  Preserve local definitions and select value names in open interfaces.
+
 - Recover Merlin environments for installed library sources from `.cmt`/`.cmti`
   artifacts, including wrapped modules and dependencies, without querying the
   enclosing workspace's Dune configuration.
