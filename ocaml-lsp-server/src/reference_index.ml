@@ -21,6 +21,25 @@ type occurrence =
   ; declaration : bool
   }
 
+(* Callable identities and execution edges are separate from [file.edges],
+   which only joins alternate declaration anchors. No typed trees escape collect. *)
+type callable =
+  { identity : symbol
+  ; name : string
+  ; first : int
+  ; last : int
+  ; selection_first : int
+  ; selection_last : int
+  ; body : bool
+  }
+
+type call =
+  { caller : symbol
+  ; callee : symbol
+  ; first : int
+  ; last : int
+  }
+
 type file =
   { source : string
   ; artifact : string option
@@ -32,6 +51,8 @@ type file =
   ; occurrences : occurrence list
   ; exports : (string * symbol) list
   ; edges : (symbol * symbol) list
+  ; callables : callable list
+  ; calls : call list
   ; ambiguous : (int * int) list
   ; text : string
   ; digest : string option
@@ -607,6 +628,157 @@ let collect
              (descriptor "class-type" cltyp_env path d.clty_uid d.clty_loc)
          | _ -> ()))
     tree;
+  let callables = ref []
+  and calls = ref [] in
+  let leading = H.create 32
+  and static_bindings = H.create 32 in
+  let regions = ref [] in
+  let function_type ty =
+    match Types.get_desc ty with
+    | Tarrow _ -> true
+    | _ -> false
+  in
+  let callable identity name (loc : Loc.t) (selection : Loc.t) body =
+    let first = max 0 loc.loc_start.pos_cnum in
+    let last = min (String.length text) loc.loc_end.pos_cnum in
+    let selection_first = selection.loc_start.pos_cnum in
+    let selection_last = selection.loc_end.pos_cnum in
+    if
+      first <= selection_first
+      && selection_first < selection_last
+      && selection_last <= last
+    then (
+      let c = { identity; name; first; last; selection_first; selection_last; body } in
+      callables := c :: !callables;
+      if body then regions := (loc, identity) :: !regions)
+  in
+  let rec mark_leading identity expression =
+    match expression.exp_desc with
+    | Texp_function { cases; _ } ->
+      H.replace leading expression.exp_loc.loc_start.pos_cnum identity;
+      List.iter cases ~f:(fun case -> mark_leading identity case.c_rhs)
+    | _ -> ()
+  in
+  let named_pattern pattern =
+    match pattern.pat_desc with
+    | Tpat_var (id, name) | Tpat_alias (_, id, name) ->
+      Option.map (find_local "value" (Path.Pident id)) ~f:(fun identity -> identity, name)
+    | _ -> None
+  in
+  let anonymous expression = local "lambda" expression.exp_loc in
+  walk
+    (fun node ->
+       match node.B.t_node with
+       | Value_binding vb when function_type vb.vb_pat.pat_type ->
+         Option.iter (named_pattern vb.vb_pat) ~f:(fun (identity, name) ->
+           H.replace static_bindings identity ();
+           let body =
+             match vb.vb_expr.exp_desc with
+             | Texp_function _ -> true
+             | _ -> false
+           in
+           callable identity name.txt vb.vb_loc name.loc body;
+           if body
+           then (
+             (* The binding name is outside its execution region. *)
+             regions
+             := (vb.vb_expr.exp_loc, identity)
+                :: List.filter !regions ~f:(fun (_, sym) -> not (Poly.equal sym identity));
+             mark_leading identity vb.vb_expr))
+       | Value_description d when function_type d.val_val.val_type ->
+         Option.iter (find_local "value" (Path.Pident d.val_id)) ~f:(fun identity ->
+           H.replace static_bindings identity ();
+           callable identity d.val_name.txt d.val_loc d.val_name.loc false)
+       | Pattern ({ pat_desc = Tpat_var _; _ } as p) when function_type p.pat_type ->
+         Option.iter (named_pattern p) ~f:(fun (identity, name) ->
+           if not (H.mem static_bindings identity)
+           then callable identity name.txt p.pat_loc name.loc false)
+       | Expression ({ exp_desc = Texp_function _; exp_loc; _ } as expression)
+         when not (H.mem leading exp_loc.loc_start.pos_cnum) ->
+         let identity = anonymous expression in
+         let first = exp_loc.loc_start.pos_cnum in
+         let selection =
+           { exp_loc with
+             loc_end =
+               { exp_loc.loc_start with
+                 pos_cnum = min exp_loc.loc_end.pos_cnum (first + 3)
+               }
+           }
+         in
+         callable
+           identity
+           (sprintf "<fun at %d>" exp_loc.loc_start.pos_lnum)
+           exp_loc
+           selection
+           true;
+         mark_leading identity expression
+       | Structure structure ->
+         let loc = Mbrowse.node_loc (Browse_raw.Structure structure) in
+         if loc.loc_end.pos_cnum > loc.loc_start.pos_cnum
+         then (
+           let identity = local "module-initializer" loc in
+           let selection =
+             { loc with
+               loc_end =
+                 { loc.loc_start with
+                   pos_cnum = min loc.loc_end.pos_cnum (loc.loc_start.pos_cnum + 1)
+                 }
+             }
+           in
+           callable identity (unit_name ^ ".<init>") loc selection true)
+       | _ -> ())
+    tree;
+  let owner loc =
+    List.filter !regions ~f:(fun (region, _) ->
+      region.Loc.loc_start.pos_cnum <= loc.Loc.loc_start.pos_cnum
+      && loc.loc_end.pos_cnum <= region.loc_end.pos_cnum)
+    |> List.sort ~compare:(fun (a, _) (b, _) ->
+      Int.compare
+        (a.Loc.loc_end.pos_cnum - a.loc_start.pos_cnum)
+        (b.Loc.loc_end.pos_cnum - b.loc_start.pos_cnum))
+    |> List.hd
+    |> Option.map ~f:snd
+  in
+  let rec target expression =
+    match expression.exp_desc with
+    | Texp_ident (path, name, d) ->
+      let identity = descriptor "value" expression.exp_env path d.val_uid d.val_loc in
+      if identity.local && not (H.mem static_bindings identity)
+      then None
+      else
+        Option.map
+          (Option.bind (components name) ~f:List.last)
+          ~f:(fun loc -> identity, loc)
+    | Texp_apply (fn, _) -> target fn
+    | Texp_function _ -> Some (anonymous expression, expression.exp_loc)
+    | _ -> None
+  in
+  walk
+    (fun node ->
+       match node.B.t_node with
+       | Expression { exp_desc = Texp_apply (fn, args); exp_loc; _ } ->
+         (try
+            let fn =
+              match fn.exp_desc, args with
+              | ( Texp_ident (_, _, { val_kind = Val_prim primitive; _ })
+                , [ (_, Some left); (_, Some right) ] ) ->
+                (match primitive.prim_name with
+                 | "%revapply" -> right
+                 | "%apply" -> left
+                 | _ -> fn)
+              | _ -> fn
+            in
+            match owner exp_loc, target fn with
+            | Some caller, Some (callee, loc) ->
+              let first = loc.loc_start.pos_cnum
+              and last = loc.loc_end.pos_cnum in
+              if first >= 0 && first < last && last <= String.length text
+              then calls := { caller; callee; first; last } :: !calls
+            | _ -> ()
+          with
+          | Not_found | Ocaml_typing.Envaux.Error _ | Env.Error _ -> ())
+       | _ -> ())
+    tree;
   let export namespace prefix parent id uid loc =
     let key = prefix ^ namespace ^ ":" ^ Ident.name id in
     let local = original_descriptor namespace (Path.Pident id) uid loc in
@@ -699,6 +871,8 @@ let collect
   ; occurrences = !occurrences
   ; exports = !exports
   ; edges = !edges
+  ; callables = !callables
+  ; calls = !calls
   ; ambiguous = !ambiguous
   ; text
   ; digest = source_digest
@@ -1086,7 +1260,7 @@ let lookup ~cache ~files ~overlays ~source ~offset ~include_declaration ~cancel 
       |> (fun occurrences ->
       has_occurrence := occurrences <> [];
       occurrences)
-      |> List.sort ~compare:(fun a b ->
+      |> List.sort ~compare:(fun (a : occurrence) (b : occurrence) ->
         match Int.compare (a.last - a.first) (b.last - b.first) with
         | Ordering.Eq ->
           Poly.compare
@@ -1172,7 +1346,7 @@ let position text offset ~encoding =
   Position.create ~line:(line - 1) ~character
 ;;
 
-let location ~encoding (file, occurrence) =
+let location ~encoding (file, (occurrence : occurrence)) =
   let start = position file.text occurrence.first ~encoding
   and end_ = position file.text occurrence.last ~encoding in
   Location.create ~uri:(Uri.of_path file.source) ~range:(Range.create ~start ~end_)
