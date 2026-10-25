@@ -40,6 +40,15 @@ val make
   -> position_encoding:[ `UTF8 | `UTF16 ]
   -> t Fiber.t
 
+(** Read a temporary document, returning [None] for missing/unreadable files. *)
+val make_from_file
+  :  Lev_fiber.Timer.Wheel.t
+  -> Merlin_config.DB.t
+  -> Single_pipeline.t
+  -> Uri.t
+  -> position_encoding:[ `UTF8 | `UTF16 ]
+  -> t option Fiber.t
+
 val uri : t -> Uri.t
 val text : t -> string
 val source : t -> Msource.t

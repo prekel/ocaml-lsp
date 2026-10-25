@@ -75,6 +75,7 @@ let%expect_test "start/stop" =
         "documentHighlightProvider": true,
         "documentRangeFormattingProvider": true,
         "documentSymbolProvider": true,
+        "implementationProvider": true,
         "executeCommandProvider": {
           "commands": [
             "ocamllsp/view-metrics", "ocamllsp/open-related-source",

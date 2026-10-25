@@ -140,6 +140,7 @@ let initialize_info (client_capabilities : ClientCapabilities.t) : InitializeRes
       ~declarationProvider:(`Bool true)
       ~definitionProvider:(`Bool true)
       ~typeDefinitionProvider:(`Bool true)
+      ~implementationProvider:(`Bool true)
       ~completionProvider
       ~signatureHelpProvider
       ~codeActionProvider
@@ -662,7 +663,8 @@ let on_request
       ()
   | TextDocumentOnTypeFormatting _ -> now None
   | SelectionRange req -> later selection_range req
-  | TextDocumentImplementation _ -> not_supported ()
+  | TextDocumentImplementation { textDocument = { uri }; position; _ } ->
+    later (fun state () -> Implementation_query.run state uri position) ()
   | SemanticTokensFull p -> later Semantic_highlighting.on_request_full p
   | SemanticTokensDelta p -> later Semantic_highlighting.on_request_full_delta p
   | TextDocumentMoniker _ -> not_supported ()

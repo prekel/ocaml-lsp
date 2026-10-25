@@ -240,7 +240,18 @@ let make_merlin wheel merlin_db pipeline tdoc syntax =
   let uri = Text_document.documentUri tdoc in
   let path = Uri.to_path uri in
   let merlin_config = Merlin_config.DB.get merlin_db uri in
-  let* mconfig = Merlin_config.config merlin_config in
+  let* mconfig =
+    let* result = Fiber.collect_errors (fun () -> Merlin_config.config merlin_config) in
+    match result with
+    | Ok config -> Fiber.return config
+    | Error errors ->
+      let* () =
+        Fiber.fork_and_join_unit
+          (fun () -> Merlin_config.destroy merlin_config)
+          (fun () -> Lev_fiber.Timer.Wheel.cancel timer)
+      in
+      Exn_with_backtrace.reraise (List.hd_exn errors)
+  in
   let kind =
     let ext = Filename.extension path in
     List.find_map mconfig.merlin.suffixes ~f:(fun (impl, intf) ->
@@ -265,6 +276,30 @@ let make wheel config pipeline (doc : DidOpenTextDocumentParams.t) ~position_enc
     match syntax with
     | Ocaml | Reason -> make_merlin wheel config pipeline tdoc syntax
     | Ocamllex | Menhir | Cram | Dune -> Fiber.return (Other { tdoc; syntax }))
+;;
+
+let make_from_file wheel config pipeline uri ~position_encoding =
+  let* () = Fiber.return () in
+  let filename = Uri.to_path uri in
+  match Io.String_path.read_file filename with
+  | exception (Unix.Unix_error _ | Sys_error _) -> Fiber.return None
+  | text ->
+    let textDocument =
+      TextDocumentItem.create
+        ~uri
+        ~languageId:(Syntax.to_language_id (Syntax.of_fname filename))
+        ~version:0
+        ~text
+    in
+    let+ doc =
+      make
+        ~position_encoding
+        wheel
+        config
+        pipeline
+        (DidOpenTextDocumentParams.create ~textDocument)
+    in
+    Some doc
 ;;
 
 let update_text ?version t changes =
