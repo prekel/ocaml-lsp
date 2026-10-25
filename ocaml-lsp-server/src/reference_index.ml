@@ -50,11 +50,17 @@ type t =
   { artifacts : (string, stamp * file) H.t
   ; sources : (string, stamp * string) H.t
   ; shapes : (string, stamp * shape_info) H.t
+  ; metadata : (string, stamp * string * string list) H.t
   ; mutable notice : string
   }
 
 let create () =
-  { artifacts = H.create 128; sources = H.create 128; shapes = H.create 128; notice = "" }
+  { artifacts = H.create 128
+  ; sources = H.create 128
+  ; shapes = H.create 128
+  ; metadata = H.create 128
+  ; notice = ""
+  }
 ;;
 
 let canonical path =
@@ -812,27 +818,49 @@ let load cache roots ~shape_roots artifact cancel =
     }
 ;;
 
-let refresh t ~roots ~paths ~cancel =
+let refresh ?units t ~roots ~paths ~cancel =
   let directories = build_roots roots paths in
   let paths = artifacts directories cancel in
   let present = H.create (List.length paths) in
+  let wanted = H.create (List.length paths) in
   let failures = ref 0 in
   List.iter paths ~f:(fun path ->
     check_cancel cancel;
     H.replace present path ();
     try
       let stamp = stat path in
-      match H.find_opt t.artifacts path with
-      | Some (previous, _) when Poly.equal stamp previous -> ()
-      | _ ->
-        (match load t roots ~shape_roots:(roots @ directories) path cancel with
-         | None -> H.remove t.artifacts path
-         | Some file ->
-           if Poly.equal stamp (stat path)
-           then H.replace t.artifacts path (stamp, file)
-           else (
-             H.remove t.artifacts path;
-             incr failures))
+      let relevant =
+        match units with
+        | None -> true
+        | Some units ->
+          let unit_name, imports =
+            match H.find_opt t.metadata path with
+            | Some (previous, name, imports) when Poly.equal previous stamp ->
+              name, imports
+            | _ ->
+              let cmt = Cmt_format.read_cmt path in
+              let imports = List.map cmt.cmt_imports ~f:fst in
+              if Poly.equal stamp (stat path)
+              then H.replace t.metadata path (stamp, cmt.cmt_modname, imports);
+              cmt.cmt_modname, imports
+          in
+          List.exists units ~f:(fun unit ->
+            String.equal unit unit_name || List.mem imports unit ~equal:String.equal)
+      in
+      if relevant
+      then (
+        H.replace wanted path ();
+        match H.find_opt t.artifacts path with
+        | Some (previous, _) when Poly.equal stamp previous -> ()
+        | _ ->
+          (match load t roots ~shape_roots:(roots @ directories) path cancel with
+           | None -> H.remove t.artifacts path
+           | Some file ->
+             if Poly.equal stamp (stat path)
+             then H.replace t.artifacts path (stamp, file)
+             else (
+               H.remove t.artifacts path;
+               incr failures)))
     with
     | Cancelled -> raise Cancelled
     | _ ->
@@ -841,7 +869,15 @@ let refresh t ~roots ~paths ~cancel =
   H.filter_map_inplace
     (fun path file -> if H.mem present path then Some file else None)
     t.artifacts;
-  let files = H.fold (fun _ (_, file) acc -> file :: acc) t.artifacts [] in
+  let files =
+    H.fold
+      (fun path (_, file) acc -> if H.mem wanted path then file :: acc else acc)
+      t.artifacts
+      []
+  in
+  H.filter_map_inplace
+    (fun path entry -> if H.mem present path then Some entry else None)
+    t.metadata;
   H.filter_map_inplace
     (fun path info -> if H.mem present path then Some info else None)
     t.shapes;
@@ -877,6 +913,21 @@ let live ?cancel ~cache ~roots pipeline doc =
     ~digest:None
     tree
     signature
+;;
+
+let target_units file ~source offset =
+  let occurrences =
+    List.filter file.occurrences ~f:(fun o -> o.first <= offset && offset <= o.last)
+  in
+  let selected =
+    List.sort occurrences ~compare:(fun a b ->
+      Int.compare (a.last - a.first) (b.last - b.first))
+    |> List.hd
+  in
+  Option.bind selected ~f:(fun o ->
+    if not (String.equal source file.source)
+    then None
+    else Some [ Option.value o.symbol.unit_name ~default:file.unit_name ])
 ;;
 
 let key namespace path first last = Marshal.to_string (namespace, path, first, last) []

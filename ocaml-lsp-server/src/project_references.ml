@@ -86,16 +86,6 @@ let run
       let* cancel = Server.cancel_token () in
       let* config = Document.Merlin.mconfig merlin in
       let execute () =
-        let* files, failures =
-          Document.Single_pipeline.run state.merlin (fun () ->
-            let module Mocaml = Merlin_kernel.Mocaml in
-            Mocaml.with_state (Mocaml.new_state ()) (fun () ->
-              Reference_index.refresh
-                state.reference_index
-                ~roots
-                ~paths:(Mconfig.build_path config @ Mconfig.cmt_path config)
-                ~cancel))
-        in
         let snapshots = documents state roots in
         let* overlays =
           Fiber.sequential_map snapshots ~f:(fun (doc, merlin) ->
@@ -112,6 +102,19 @@ let run
         in
         let offset =
           Text_document.absolute_position (Document.text_document doc) position
+        in
+        let* files, failures =
+          Document.Single_pipeline.run state.merlin (fun () ->
+            let module Mocaml = Merlin_kernel.Mocaml in
+            Mocaml.with_state (Mocaml.new_state ()) (fun () ->
+              Reference_index.refresh
+                ?units:
+                  (List.find_map overlays ~f:(fun file ->
+                     Reference_index.target_units file ~source offset))
+                state.reference_index
+                ~roots
+                ~paths:(Mconfig.build_path config @ Mconfig.cmt_path config)
+                ~cancel))
         in
         let* found, stale =
           Document.Single_pipeline.run state.merlin (fun () ->

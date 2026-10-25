@@ -15,7 +15,8 @@ val canonical : string -> string
 val under : string -> string -> bool
 
 val refresh
-  :  t
+  :  ?units:string list
+  -> t
   -> roots:string list
   -> paths:string list
   -> cancel:Fiber.Cancel.t option
@@ -28,6 +29,8 @@ val live
   -> Mpipeline.t
   -> Document.t
   -> file
+
+val target_units : file -> source:string -> int -> string list option
 
 val lookup
   :  cache:t
