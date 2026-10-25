@@ -182,7 +182,11 @@ let send =
           | `All -> Uri_set.empty
           | `One uri -> Uri_set.remove t.dirty_uris uri);
       Table.foldi pending ~init:[] ~f:(fun uri diagnostics acc ->
-        let diagnostics = List.flatten (Range_map.values diagnostics) in
+        let diagnostics =
+          if Option.is_some (Installed_library.root (Uri.to_path uri))
+          then []
+          else List.flatten (Range_map.values diagnostics)
+        in
         (* we don't include a version because some of the diagnostics might
            come from dune which reads from the file system and not from the
            editor's view *)
@@ -363,44 +367,47 @@ let merlin_diagnostics diagnostics merlin =
   let create_diagnostic = Diagnostic.create ~source:ocamllsp_source in
   let open Fiber.O in
   let+ all_diagnostics =
-    let command =
-      Query_protocol.Errors { lexing = true; parsing = true; typing = true }
-    in
-    Document.Merlin.with_pipeline_exn ~name:"diagnostics" merlin (fun pipeline ->
-      match Query_commands.dispatch pipeline command with
-      | exception Merlin_extend.Extend_main.Handshake.Error error ->
-        let message =
-          `String
-            (sprintf
-               "%s.\nHint: install the following packages: merlin-extend, reason"
-               error)
-        in
-        [ create_diagnostic ~range:Range.first_line ~message () ]
-      | errors ->
-        let merlin_diagnostics =
-          List.rev_map errors ~f:(error_to_diagnostics ~diagnostics ~merlin)
-        in
-        let holes_as_err_diags =
-          Query_commands.dispatch pipeline Holes
-          |> List.rev_map ~f:(fun (loc, typ) ->
-            let range = Range.of_loc loc in
-            let severity = DiagnosticSeverity.Error in
-            let message =
-              "This typed hole should be replaced with an expression of type " ^ typ
-            in
-            (* we set specific diagnostic code = "hole" to be able to
+    if Document.Merlin.is_installed merlin
+    then Fiber.return []
+    else (
+      let command =
+        Query_protocol.Errors { lexing = true; parsing = true; typing = true }
+      in
+      Document.Merlin.with_pipeline_exn ~name:"diagnostics" merlin (fun pipeline ->
+        match Query_commands.dispatch pipeline command with
+        | exception Merlin_extend.Extend_main.Handshake.Error error ->
+          let message =
+            `String
+              (sprintf
+                 "%s.\nHint: install the following packages: merlin-extend, reason"
+                 error)
+          in
+          [ create_diagnostic ~range:Range.first_line ~message () ]
+        | errors ->
+          let merlin_diagnostics =
+            List.rev_map errors ~f:(error_to_diagnostics ~diagnostics ~merlin)
+          in
+          let holes_as_err_diags =
+            Query_commands.dispatch pipeline Holes
+            |> List.rev_map ~f:(fun (loc, typ) ->
+              let range = Range.of_loc loc in
+              let severity = DiagnosticSeverity.Error in
+              let message =
+                "This typed hole should be replaced with an expression of type " ^ typ
+              in
+              (* we set specific diagnostic code = "hole" to be able to
                filter through diagnostics easily *)
-            create_diagnostic
-              ~code:(`String "hole")
-              ~range
-              ~message:(`String message)
-              ~severity
-              ())
-        in
-        (* Can we use [List.merge] instead? *)
-        List.rev_append holes_as_err_diags merlin_diagnostics
-        |> List.sort ~compare:(fun (d1 : Diagnostic.t) (d2 : Diagnostic.t) ->
-          Range.compare d1.range d2.range))
+              create_diagnostic
+                ~code:(`String "hole")
+                ~range
+                ~message:(`String message)
+                ~severity
+                ())
+          in
+          (* Can we use [List.merge] instead? *)
+          List.rev_append holes_as_err_diags merlin_diagnostics
+          |> List.sort ~compare:(fun (d1 : Diagnostic.t) (d2 : Diagnostic.t) ->
+            Range.compare d1.range d2.range)))
   in
   set diagnostics (`Merlin (uri, all_diagnostics))
 ;;

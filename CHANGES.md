@@ -3,6 +3,9 @@
 - Recover Merlin environments for installed library sources from `.cmt`/`.cmti`
   artifacts, including wrapped modules and dependencies, without querying the
   enclosing workspace's Dune configuration.
+- Browse installed library sources without publishing diagnostics, including
+  when build-time preprocessors or internal modules are unavailable. Project
+  sources retain their usual diagnostics. See [browsing installed libraries](ocaml-lsp-server/docs/library-sources.md).
 
 - Keep Hover working when ocamlformat-rpc dies during startup (backport of
   upstream f6aee54d).

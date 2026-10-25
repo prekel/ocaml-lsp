@@ -311,6 +311,7 @@ module Merlin = struct
   ;;
 
   let mconfig (t : t) = Merlin_config.config t.merlin_config
+  let is_installed (t : t) = Merlin_config.is_installed t.merlin_config
 
   let with_pipeline_exn ?name doc f =
     let+ res = with_pipeline ?name doc f in

@@ -8,6 +8,9 @@ val should_read_dot_merlin : bool ref
 val config : t -> Mconfig.t Fiber.t
 val destroy : t -> unit Fiber.t
 
+(** Installed library sources are browsed without project diagnostics. *)
+val is_installed : t -> bool
+
 module DB : sig
   type config := t
   type t

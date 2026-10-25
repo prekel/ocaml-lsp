@@ -127,6 +127,32 @@ maybeDescribe("installed library sources", () => {
     });
   }
 
+  function nextDiagnostics(uri: string, notify: () => void) {
+    return new Promise<Types.Diagnostic[]>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        subscription.dispose();
+        reject(new Error("No diagnostics received for " + uri));
+      }, 5000);
+      const subscription = server.onNotification(
+        Protocol.PublishDiagnosticsNotification.type,
+        (params) => {
+          if (params.uri !== uri) return;
+          clearTimeout(timeout);
+          subscription.dispose();
+          resolve(params.diagnostics);
+        },
+      );
+      notify();
+    });
+  }
+
+  function change(uri: string, version: number, text: string) {
+    server.sendNotification(Protocol.DidChangeTextDocumentNotification.type, {
+      textDocument: { uri, version },
+      contentChanges: [{ text }],
+    });
+  }
+
   it("restores the wrapped unit, installed dependencies and typing options", async () => {
     const { uri, text } = open();
     const settings = await config(uri);
@@ -188,7 +214,10 @@ maybeDescribe("installed library sources", () => {
     const stdune = execFileSync("ocamlfind", ["query", "stdune"], {
       encoding: "utf8",
     }).trim();
-    const { uri, text } = open(path.join(stdune, "list.ml"));
+    const file = path.join(stdune, "list.ml");
+    const uri = URI.file(file).toString();
+    expect(await nextDiagnostics(uri, () => open(file))).toEqual([]);
+    const text = fs.readFileSync(file, "utf8");
     const settings = await config(uri);
     expect(settings.merlin.unit_name).toBe("Stdune__List");
     expect(settings.ocaml.open_modules).toContain("Stdune__");
@@ -274,5 +303,75 @@ maybeDescribe("installed library sources", () => {
     expect((await config(uri)).merlin.failures.join("\n")).toContain(
       "No config found",
     );
+  });
+
+  it("browses installed buffers without type or syntax diagnostics", async () => {
+    const file = filename();
+    const uri = URI.file(file).toString();
+    const diagnostics = await nextDiagnostics(uri, () => {
+      open(file, 'let value : int = "wrong"\nlet x = Missing.value\n');
+    });
+    expect(diagnostics).toEqual([]);
+    expect(
+      await nextDiagnostics(uri, () => change(uri, 1, "let broken = (")),
+    ).toEqual([]);
+    const tokens = await server.sendRequest(
+      Protocol.SemanticTokensRequest.type,
+      {
+        textDocument: { uri },
+      },
+    );
+    expect(tokens!.data.length).toBeGreaterThan(0);
+  });
+
+  it("keeps browsing diagnostics empty without compiled annotations", async () => {
+    for (const name of fs.readdirSync(path.dirname(filename()))) {
+      if (/\.cmti?$/.test(name)) fs.unlinkSync(filename(name));
+    }
+    const file = filename();
+    const uri = URI.file(file).toString();
+    expect(
+      await nextDiagnostics(uri, () => open(file, "let x = Missing.value\n")),
+    ).toEqual([]);
+  });
+
+  it("clears earlier diagnostics when a source becomes installed", async () => {
+    fs.rmdirSync(path.join(prefix, ".opam-switch"));
+    const file = filename();
+    const uri = URI.file(file).toString();
+    const text = "let value = Missing.value\n";
+    const before = await nextDiagnostics(uri, () => open(file, text));
+    expect(
+      before.some((diagnostic) =>
+        diagnostic.message.includes("No config found"),
+      ),
+    ).toBe(true);
+    fs.mkdirSync(path.join(prefix, ".opam-switch"));
+    expect(await nextDiagnostics(uri, () => change(uri, 1, text))).toEqual([]);
+    expect((await config(uri)).merlin.failures).toEqual([]);
+  });
+
+  it("keeps type errors in a normally configured project", async () => {
+    const file = path.join(directory, "project.ml");
+    fs.writeFileSync(file, "let value = 42\n");
+    fs.writeFileSync(
+      path.join(directory, "dune"),
+      "(library (name project))\n",
+    );
+    execFileSync("dune", ["build", "--root", directory, "@check"], {
+      stdio: "pipe",
+    });
+    const uri = URI.file(file).toString();
+    const diagnostics = await nextDiagnostics(uri, () =>
+      open(file, 'let value : int = "wrong"\n'),
+    );
+    expect(
+      diagnostics.some((diagnostic) => diagnostic.message.includes("string")),
+    ).toBe(true);
+    expect(
+      diagnostics.some((diagnostic) =>
+        diagnostic.message.includes("No config found"),
+      ),
+    ).toBe(false);
   });
 });

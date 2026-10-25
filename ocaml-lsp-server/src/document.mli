@@ -103,6 +103,7 @@ module Merlin : sig
   val kind : t -> Kind.t
   val to_doc : t -> doc
   val mconfig : t -> Mconfig.t Fiber.t
+  val is_installed : t -> bool
 end
 
 val kind : t -> [ `Merlin of Merlin.t | `Other ]

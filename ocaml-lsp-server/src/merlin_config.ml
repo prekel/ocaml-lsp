@@ -295,6 +295,8 @@ let create db path =
   { path; directory; initial; db; entry = None }
 ;;
 
+let is_installed t = Option.is_some (Installed_library.root t.path)
+
 let config (t : t) : Mconfig.t Fiber.t =
   let use_entry entry =
     Entry.incr entry;
