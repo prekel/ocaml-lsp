@@ -134,6 +134,19 @@ let exported : Types.signature_item -> bool = function
   | Sig_class_type (_, _, _, visibility) -> visibility = Exported
 ;;
 
+let in_region (region : Loc.t) (loc : Loc.t) =
+  region.loc_start.pos_cnum <= loc.loc_start.pos_cnum
+  && loc.loc_start.pos_cnum < region.loc_end.pos_cnum
+;;
+
+let has_errors pipeline region =
+  Mtyper.get_errors (Mpipeline.typer_result pipeline)
+  |> List.exists ~f:(fun error ->
+    match Loc.error_of_exn error with
+    | Some (`Ok report) -> report.kind = Report_error && in_region region report.main.loc
+    | Some `Already_displayed | None -> false)
+;;
+
 let rec public_module_type : Types.module_type -> Types.module_type = function
   | Mty_signature signature -> Mty_signature (public_signature signature)
   | Mty_functor (parameter, result) ->
@@ -167,6 +180,68 @@ and public_signature (signature : Types.signature) : Types.signature =
            in
            Types.Sig_modtype (id, declaration, visibility)
          | _ -> item))
+;;
+
+let signature_in_region ?(exclude = []) pipeline region =
+  let result = ref None in
+  let excluded item =
+    match item with
+    | Types.Sig_type (id, declaration, _, _) ->
+      List.exists exclude ~f:(fun source ->
+        String.equal (Ident.name id) source.Parsetree.ptype_name.txt
+        && in_region source.ptype_loc declaration.type_loc)
+    | _ -> false
+  in
+  let select items env =
+    let generated =
+      List.filter items ~f:(fun item ->
+        in_region region (signature_location item) && not (excluded item))
+      |> public_signature
+    in
+    if not (List.is_empty generated)
+    then
+      let module Printtyp = Merlin_analysis.Type_utils.Printtyp in
+      let verbosity = (Mpipeline.final_config pipeline).query.verbosity in
+      result
+      := Some
+           (Printtyp.wrap_printing_env ~verbosity env (fun () ->
+              Format.asprintf "%a" Printtyp.signature generated))
+  in
+  let default = Ocaml_typing.Tast_iterator.default_iterator in
+  let iterator =
+    { default with
+      structure =
+        (fun self structure ->
+          if Option.is_none !result
+          then (
+            let env =
+              List.fold_left
+                structure.Typedtree.str_items
+                ~init:structure.str_final_env
+                ~f:(fun env item ->
+                  if in_region region item.Typedtree.str_loc then item.str_env else env)
+            in
+            select structure.str_type env;
+            if Option.is_none !result then default.structure self structure))
+    ; signature =
+        (fun self signature ->
+          if Option.is_none !result
+          then (
+            let env =
+              List.fold_left
+                signature.Typedtree.sig_items
+                ~init:signature.sig_final_env
+                ~f:(fun env item ->
+                  if in_region region item.Typedtree.sig_loc then item.sig_env else env)
+            in
+            select signature.sig_type env;
+            if Option.is_none !result then default.signature self signature))
+    }
+  in
+  (match Mtyper.get_typedtree (Mpipeline.typer_result pipeline) with
+   | `Implementation structure -> iterator.structure iterator structure
+   | `Interface signature -> iterator.signature iterator signature);
+  if has_errors pipeline region then None else !result
 ;;
 
 let signature pipeline t =

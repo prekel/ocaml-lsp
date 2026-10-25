@@ -187,6 +187,7 @@ def main():
                         "range": {"start": {"line": 0, "character": 0}, "end": {"line": len(source.splitlines()), "character": 0}},
                     })
                     responses["codeLens"] = client.request("textDocument/codeLens", {"textDocument": document})
+                    responses["inferredInterface"] = client.request("ocamllsp/inferIntf", [file.as_uri()])
                     responses["codeActions"] = {}
                     for label, line, character in [("type", 0, 7), ("attribute", 4, 13)]:
                         position = {"line": line, "character": character}
@@ -208,6 +209,14 @@ def main():
                     responses["shownDocuments"] = client.shown_documents
                     for shown in client.shown_documents:
                         (output / f"{name}-expansion.ml").write_text(shown["text"])
+                    (output / f"{name}-inferred.mli").write_text(responses["inferredInterface"])
+                    (root / "example.mli").write_text(responses["inferredInterface"])
+                    interface_build = subprocess.run(
+                        ["dune", "build", "--root", str(root)], env=env,
+                        text=True, capture_output=True,
+                    )
+                    (output / f"{name}-interface-build.log").write_text(interface_build.stdout + interface_build.stderr)
+                    interface_build.check_returncode()
                     responses["notifications"] = client.notifications
                     (output / f"{name}.json").write_text(json.dumps(responses, indent=2) + "\n")
                     print(f"{name}: {len(responses['inlayHints'] or [])} inlay hints, {len(responses['codeLens'] or [])} lenses")

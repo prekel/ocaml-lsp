@@ -19,7 +19,14 @@ let on_request ~(params : Jsonrpc.Structured.t option) (state : State.t) =
                  first."
               ())
        | Some impl ->
-         let+ intf = Inference.infer_intf_for_impl impl in
+         let* intf = Inference.infer_intf_for_impl impl in
+         let path = Filename.chop_extension (Uri.to_path json_uri) ^ ".mli" in
+         let+ formatted = Ocamlformat_rpc.format_text state.ocamlformat_rpc ~path intf in
+         let intf =
+           match formatted with
+           | Ok formatted -> formatted
+           | Error _ -> intf
+         in
          Json.t_of_yojson (`String intf))
     | Some json ->
       Jsonrpc.Response.Error.raise

@@ -76,6 +76,13 @@ place the cursor inside the attribute and invoke the lightbulb menu or `Ctrl+.`.
 The metadata includes the server binary hash and worktree status to identify
 the exact build even when implementation changes are not committed.
 
+The script now also requests `ocamllsp/inferIntf`, saves the inferred interface
+and rebuilds the temporary project with it. This checks that PPX-generated
+anonymous bindings do not leak into an invalid `.mli`. The general PPX tests
+in `ppx_all.ml` cover all extension point categories, ordinary PPX attributes,
+and UTF16 cursor positions. `inferred_interface_formatting.ml` checks project
+formatting, valid inferred signatures, and counterpart navigation.
+
 There is also a self-contained regression test in
 `ocaml-lsp-server/test/e2e-new/ppx_source_hints.ml`. Its local PPX deliberately
 generates bindings and parameters at non-ghost locations belonging to record

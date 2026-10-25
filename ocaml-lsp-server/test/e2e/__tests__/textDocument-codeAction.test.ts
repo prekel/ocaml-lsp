@@ -253,25 +253,6 @@ let x = _
           "kind": "refactor.extract",
           "title": "Extract function",
         },
-        Object {
-          "command": Object {
-            "arguments": Array [
-              "file:///test.mli",
-            ],
-            "command": "ocamllsp/open-related-source",
-            "title": "Create test.mli",
-          },
-          "edit": Object {
-            "documentChanges": Array [
-              Object {
-                "kind": "create",
-                "uri": "file:///test.mli",
-              },
-            ],
-          },
-          "kind": "switch",
-          "title": "Create test.mli",
-        },
       ]
     `);
 

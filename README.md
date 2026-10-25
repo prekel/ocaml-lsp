@@ -304,13 +304,19 @@ of the value needs to be non-polymorphic to construct a meaningful value.
 Tip (for VS Code OCaml Platform users): You can construct a value using a keybinding
 <kbd>Alt</kbd>+<kbd>C</kbd> or on MacOS <kbd>Option</kbd>+<kbd>C</kbd>
 
-#### PPX deriving signatures and generated code
+#### PPX signatures and generated code
 
 Hovering over a type declaration with `[@@deriving ...]` shows the type followed
 by the signatures of the generated declarations. Hovering anywhere inside the
 attribute shows just the generated signatures, including their names.
 
-To inspect the full implementation, place the cursor inside `[@@deriving ...]`
+This also works for PPX extension points in expressions, patterns, types,
+modules, classes, structure and signature items, including `let%...` syntax.
+Hover over the extension name or a transformed attribute to see its inferred
+result type or generated signature.
+
+To inspect the full implementation, place the cursor inside the PPX extension
+or attribute (for example `[%...]`, `[%%...]`, or `[@@deriving ...]`)
 and choose **Show generated code** from the code actions menu (for example,
 <kbd>Ctrl</kbd>+<kbd>.</kbd> in VS Code). This opens a temporary `.ml` or `.mli`
 snapshot generated from the current editor buffer, including unsaved changes.
@@ -319,6 +325,14 @@ editor supporting `window/showDocument`.
 
 When type errors prevent a reliable signature from being inferred, the attribute
 hover falls back to displaying the full PPX expansion.
+
+#### Implementation/interface navigation
+
+Use **Switch implementation/interface** (<kbd>Alt</kbd>+<kbd>O</kbd> in VS Code)
+to switch files or create a missing interface from the inferred signature.
+Inferred interfaces are formatted using the target file's project configuration
+when ocamlformat RPC is available. Code actions offer **Open ...** for existing
+counterpart files.
 
 #### Syntax Documentation
 

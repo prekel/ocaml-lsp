@@ -42,22 +42,15 @@ let for_uri (capabilities : ShowDocumentClientCapabilities.t option) doc =
   | false -> []
   | true ->
     Document.get_impl_intf_counterparts merlin_doc uri
-    |> List.map ~f:(fun uri ->
+    |> List.filter_map ~f:(fun uri ->
       let path = Uri.to_path uri in
-      let exists = Sys.file_exists path in
-      let title =
-        sprintf "%s %s" (if exists then "Open" else "Create") (Filename.basename path)
-      in
-      let command =
-        let arguments = [ DocumentUri.yojson_of_t uri ] in
-        Command.create ~title ~command:command_name ~arguments ()
-      in
-      let edit =
-        match exists with
-        | true -> None
-        | false ->
-          let documentChanges = [ `CreateFile (CreateFile.create ~uri ()) ] in
-          Some (WorkspaceEdit.create ~documentChanges ())
-      in
-      CodeAction.create ?edit ~title ~kind:(CodeActionKind.Other "switch") ~command ())
+      if not (Sys.file_exists path)
+      then None
+      else (
+        let title = sprintf "Open %s" (Filename.basename path) in
+        let command =
+          let arguments = [ DocumentUri.yojson_of_t uri ] in
+          Command.create ~title ~command:command_name ~arguments ()
+        in
+        Some (CodeAction.create ~title ~kind:(CodeActionKind.Other "switch") ~command ())))
 ;;

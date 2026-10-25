@@ -1,4 +1,5 @@
 (library
  (name ppx_source_fixture)
+ (modules_without_implementation extensions_intf)
  (preprocess
   (pps ppx_source_locations)))

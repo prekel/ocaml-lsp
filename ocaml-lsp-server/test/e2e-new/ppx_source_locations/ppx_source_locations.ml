@@ -81,7 +81,7 @@ let generation declaration attribute =
   else items
 ;;
 
-let generated_signature declaration attribute =
+let generated_signature_declarations declaration attribute =
   let loc = declaration.ptype_loc in
   match declaration.ptype_kind with
   | Ptype_record (field :: _) ->
@@ -113,12 +113,13 @@ let generated_signature declaration attribute =
 ;;
 
 let rewrite declarations generate =
+  let handled attribute =
+    String.equal attribute.attr_name.txt "deriving"
+    || String.equal attribute.attr_name.txt "source_locations"
+  in
   let attributes =
     List.concat_map
-      (fun declaration ->
-         List.filter
-           (fun attribute -> String.equal attribute.attr_name.txt "deriving")
-           declaration.ptype_attributes)
+      (fun declaration -> List.filter handled declaration.ptype_attributes)
       declarations
   in
   let generated =
@@ -133,7 +134,7 @@ let rewrite declarations generate =
       (fun declaration ->
          let attributes =
            List.filter
-             (fun attribute -> not (String.equal attribute.attr_name.txt "deriving"))
+             (fun attribute -> not (handled attribute))
              declaration.ptype_attributes
          in
          { declaration with ptype_attributes = attributes })
@@ -142,9 +143,98 @@ let rewrite declarations generate =
   declarations, generated
 ;;
 
+let is_extension name = String.starts_with ~prefix:"source_locations" name.txt
+let int_type ~loc = ptyp_constr ~loc { txt = Lident "int"; loc } []
+
+let generated_structure ?(name = "generated") ~loc () =
+  [ pstr_value
+      ~loc
+      Nonrecursive
+      [ value_binding ~loc ~pat:(pvar ~loc name) ~expr:(eint ~loc 42) ]
+  ]
+;;
+
+let generated_signature ?(name = "generated") ~loc () =
+  [ psig_value
+      ~loc
+      (value_description ~loc ~name:{ txt = name; loc } ~type_:(int_type ~loc) ~prim:[])
+  ]
+;;
+
+let extension_attributes attributes =
+  List.filter
+    (fun attribute ->
+       if String.equal attribute.attr_name.txt "deriving"
+       then (
+         Attribute.mark_as_handled_manually attribute;
+         false)
+       else true)
+    attributes
+;;
+
 let mapper =
   object
     inherit Ast_traverse.map as super
+
+    method! expression expression =
+      let expression = super#expression expression in
+      let loc = expression.pexp_loc in
+      match expression.pexp_desc with
+      | Pexp_extension (name, _) when is_extension name -> eint ~loc 42
+      | _ ->
+        if
+          List.exists
+            (fun attribute -> String.equal attribute.attr_name.txt "source_locations")
+            expression.pexp_attributes
+        then (
+          List.iter Attribute.mark_as_handled_manually expression.pexp_attributes;
+          eint ~loc 42)
+        else expression
+
+    method! pattern pattern =
+      let pattern = super#pattern pattern in
+      match pattern.ppat_desc with
+      | Ppat_extension (name, _) when is_extension name ->
+        pvar ~loc:pattern.ppat_loc "captured"
+      | _ -> pattern
+
+    method! core_type typ =
+      let typ = super#core_type typ in
+      match typ.ptyp_desc with
+      | Ptyp_extension (name, _) when is_extension name -> int_type ~loc:typ.ptyp_loc
+      | _ -> typ
+
+    method! module_expr expr =
+      let expr = super#module_expr expr in
+      match expr.pmod_desc with
+      | Pmod_extension (name, _) when is_extension name ->
+        pmod_structure ~loc:expr.pmod_loc (generated_structure ~loc:expr.pmod_loc ())
+      | _ -> expr
+
+    method! module_type typ =
+      let typ = super#module_type typ in
+      match typ.pmty_desc with
+      | Pmty_extension (name, _) when is_extension name ->
+        pmty_signature ~loc:typ.pmty_loc (generated_signature ~loc:typ.pmty_loc ())
+      | _ -> typ
+
+    method! class_expr expr =
+      let expr = super#class_expr expr in
+      match expr.pcl_desc with
+      | Pcl_extension (name, _) when is_extension name ->
+        pcl_structure
+          ~loc:expr.pcl_loc
+          { pcstr_self = ppat_any ~loc:expr.pcl_loc; pcstr_fields = [] }
+      | _ -> expr
+
+    method! class_type typ =
+      let typ = super#class_type typ in
+      match typ.pcty_desc with
+      | Pcty_extension (name, _) when is_extension name ->
+        pcty_signature
+          ~loc:typ.pcty_loc
+          { pcsig_self = ptyp_any ~loc:typ.pcty_loc; pcsig_fields = [] }
+      | _ -> typ
 
     method! structure structure =
       super#structure structure
@@ -153,6 +243,21 @@ let mapper =
         | Pstr_type (recursive, declarations) ->
           let declarations, generated = rewrite declarations generation in
           { item with pstr_desc = Pstr_type (recursive, declarations) } :: generated
+        | Pstr_typext extension ->
+          let extension =
+            { extension with
+              ptyext_attributes = extension_attributes extension.ptyext_attributes
+            }
+          in
+          { item with pstr_desc = Pstr_typext extension }
+          :: generated_structure ~name:"generated_extension" ~loc:item.pstr_loc ()
+        | Pstr_extension ((name, payload), _) when is_extension name ->
+          (match payload with
+           | PStr (_ :: _ as items) -> items
+           | _ -> generated_structure ~loc:item.pstr_loc ())
+        | Pstr_attribute attribute when is_extension attribute.attr_name ->
+          Attribute.mark_as_handled_manually attribute;
+          generated_structure ~name:"floating" ~loc:item.pstr_loc ()
         | _ -> [ item ])
 
     method! signature signature =
@@ -160,8 +265,23 @@ let mapper =
       |> List.concat_map (fun item ->
         match item.psig_desc with
         | Psig_type (recursive, declarations) ->
-          let declarations, generated = rewrite declarations generated_signature in
+          let declarations, generated =
+            rewrite declarations generated_signature_declarations
+          in
           { item with psig_desc = Psig_type (recursive, declarations) } :: generated
+        | Psig_typext extension ->
+          let extension =
+            { extension with
+              ptyext_attributes = extension_attributes extension.ptyext_attributes
+            }
+          in
+          { item with psig_desc = Psig_typext extension }
+          :: generated_signature ~name:"generated_extension" ~loc:item.psig_loc ()
+        | Psig_extension ((name, _), _) when is_extension name ->
+          generated_signature ~loc:item.psig_loc ()
+        | Psig_attribute attribute when is_extension attribute.attr_name ->
+          Attribute.mark_as_handled_manually attribute;
+          generated_signature ~name:"floating" ~loc:item.psig_loc ()
         | _ -> [ item ])
   end
 ;;

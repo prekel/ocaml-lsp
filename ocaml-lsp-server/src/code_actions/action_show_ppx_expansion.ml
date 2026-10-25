@@ -24,8 +24,9 @@ let t state =
     let open Option.O in
     let* () = Option.some_if (available (State.client_capabilities state)) () in
     let position = params.CodeActionParams.range.start in
-    let* deriving = Ppx_deriving.at_position pipeline (logical doc position) in
-    let* (_ : string) = Ppx_deriving.expansion pipeline deriving in
+    let* (_ : Ppx_expansion.t) =
+      Ppx_expansion.at_position pipeline (logical doc position)
+    in
     let arguments =
       [ DocumentUri.yojson_of_t (Document.uri doc)
       ; `Int (Document.version doc)
@@ -68,8 +69,8 @@ let command_run server (params : ExecuteCommandParams.t) =
     | `Merlin merlin ->
       Document.Merlin.with_pipeline_exn ~name:"show-ppx-expansion" merlin (fun pipeline ->
         let open Option.O in
-        let* deriving = Ppx_deriving.at_position pipeline (logical doc position) in
-        Ppx_deriving.expansion pipeline deriving)
+        let* ppx = Ppx_expansion.at_position pipeline (logical doc position) in
+        Ppx_expansion.expansion pipeline ppx)
   in
   (match Document_store.get_opt state.store uri with
    | Some current
@@ -79,7 +80,7 @@ let command_run server (params : ExecuteCommandParams.t) =
   let expansion =
     match expansion with
     | Some expansion -> expansion
-    | None -> error InvalidParams "No deriving expansion at this position"
+    | None -> error InvalidParams "No PPX expansion at this position"
   in
   let extension =
     match Document.kind doc with

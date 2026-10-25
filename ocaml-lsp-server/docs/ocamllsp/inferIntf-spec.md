@@ -26,5 +26,7 @@ property type: `boolean`
 
 ## Response
 
-- result: String
+- result: String, formatted using the target `.mli` path and its project's
+  ocamlformat configuration when the formatter is available. If formatting is
+  unavailable or fails, the inferred signature is returned without formatting.
 - error: code and message set in case an exception happens during the processing of the request.

@@ -16,6 +16,8 @@
    ppx_source_fixture/fixture.ml
    ppx_source_fixture/rich.ml
    ppx_source_fixture/rich.mli
+   ppx_source_fixture/extensions.ml
+   ppx_source_fixture/extensions_intf.mli
    (alias ppx_source_fixture/all)
    (package ocaml-lsp-server)))
  (libraries
@@ -63,6 +65,8 @@
     inlay_hints
     ppx_source_hints
     ppx_deriving_actions
+    ppx_all
+    inferred_interface_formatting
     jump_to_typed_hole
     merlin_call_compatible
     diagnostics_filter
