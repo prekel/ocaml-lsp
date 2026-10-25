@@ -307,6 +307,32 @@ maybeDescribe("project references on OCaml 4.14", () => {
     });
   });
 
+  it("finds project references to installed library declarations and implementations", async () => {
+    fs.writeFileSync(
+      path.join(directory, "dune"),
+      "(library (name references) (wrapped false) (libraries stdune))\n",
+    );
+    fs.writeFileSync(
+      path.join(directory, "b.ml"),
+      'let fail () = Stdune.Code_error.raise "boom" []\n',
+    );
+    build();
+    await start();
+    const fromUse = await query("b.ml", "Code_error.raise", false, 11);
+    expect(counts(fromUse)).toEqual({ "b.ml": 1 });
+    const stdune = execFileSync("ocamlfind", ["query", "stdune"], {
+      encoding: "utf8",
+    }).trim();
+    for (const ext of ["ml", "mli"]) {
+      const name = path.relative(
+        directory,
+        path.join(stdune, "code_error." + ext),
+      );
+      const found = await query(name, "raise", false);
+      expect(found.some((loc) => loc.name === "b.ml")).toBe(true);
+    }
+  });
+
   it("indexes wrapped libraries using the compiler unit identity", async () => {
     fs.writeFileSync(
       path.join(directory, "dune"),

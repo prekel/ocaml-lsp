@@ -34,7 +34,7 @@ let workspace_roots state source =
   if List.exists roots ~f:(fun root -> Reference_index.under root source)
   then roots
   else if roots <> []
-  then []
+  then if Option.is_some (Installed_library.root source) then roots else []
   else (
     let rec find directory =
       if Sys.file_exists (Filename.concat directory "dune-project")
@@ -87,6 +87,13 @@ let run
       let* config = Document.Merlin.mconfig merlin in
       let execute () =
         let snapshots = documents state roots in
+        let snapshots =
+          if
+            List.exists snapshots ~f:(fun (snapshot, _) ->
+              Uri.equal (Document.uri snapshot) uri)
+          then snapshots
+          else (doc, merlin) :: snapshots
+        in
         let* overlays =
           Fiber.sequential_map snapshots ~f:(fun (doc, merlin) ->
             Document.Merlin.with_pipeline_exn
@@ -103,19 +110,32 @@ let run
         let offset =
           Text_document.absolute_position (Document.text_document doc) position
         in
+        let units =
+          List.find_map overlays ~f:(fun file ->
+            Reference_index.target_units file ~source offset)
+        in
         let* files, failures =
           Document.Single_pipeline.run state.merlin (fun () ->
             let module Mocaml = Merlin_kernel.Mocaml in
             Mocaml.with_state (Mocaml.new_state ()) (fun () ->
               Reference_index.refresh
-                ?units:
-                  (List.find_map overlays ~f:(fun file ->
-                     Reference_index.target_units file ~source offset))
+                ?units
                 state.reference_index
                 ~roots
                 ~paths:(Mconfig.build_path config @ Mconfig.cmt_path config)
                 ~cancel))
         in
+        let* support =
+          Document.Single_pipeline.run state.merlin (fun () ->
+            let module Mocaml = Merlin_kernel.Mocaml in
+            Mocaml.with_state (Mocaml.new_state ()) (fun () ->
+              Reference_index.supporting_files
+                state.reference_index
+                ~files:overlays
+                ~units:(Option.value units ~default:[])
+                ~cancel))
+        in
+        let files = support @ files in
         let* found, stale =
           Document.Single_pipeline.run state.merlin (fun () ->
             Reference_index.lookup
@@ -136,7 +156,14 @@ let run
                  ~code:ContentModified
                  ~message:"A document changed while finding references"
                  ()));
-        if versions snapshots <> versions (documents state roots)
+        if
+          versions
+            (List.filter snapshots ~f:(fun (doc, _) ->
+               List.exists roots ~f:(fun root ->
+                 Reference_index.under
+                   root
+                   (Reference_index.canonical (Uri.to_path (Document.uri doc))))))
+          <> versions (documents state roots)
         then
           Jsonrpc.Response.Error.raise
             (Jsonrpc.Response.Error.make

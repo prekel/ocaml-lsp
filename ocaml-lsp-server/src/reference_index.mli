@@ -30,6 +30,14 @@ val live
   -> Document.t
   -> file
 
+(** Matching annotations for selected installed units only; no dependency-body scan. *)
+val supporting_files
+  :  t
+  -> files:file list
+  -> units:string list
+  -> cancel:Fiber.Cancel.t option
+  -> file list
+
 val target_units : file -> source:string -> int -> string list option
 
 val lookup

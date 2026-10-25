@@ -71,6 +71,7 @@ type t =
   { artifacts : (string, stamp * file) H.t
   ; sources : (string, stamp * string) H.t
   ; shapes : (string, stamp * shape_info) H.t
+  ; support : (string, stamp * string * file) H.t
   ; metadata : (string, stamp * string * string list) H.t
   ; mutable notice : string
   }
@@ -79,6 +80,7 @@ let create () =
   { artifacts = H.create 128
   ; sources = H.create 128
   ; shapes = H.create 128
+  ; support = H.create 64
   ; metadata = H.create 128
   ; notice = ""
   }
@@ -930,11 +932,15 @@ let source_of_cmt roots cmt =
     else None)
 ;;
 
-let load cache roots ~shape_roots artifact cancel =
+let load ?source_override ?loadpath_override cache roots ~shape_roots artifact cancel =
   let cmt = Cmt_format.read_cmt artifact in
   H.replace cache.shapes (canonical artifact) (stat artifact, shape_info cmt);
   let open Option.O in
-  let* source = source_of_cmt roots cmt in
+  let* source =
+    match source_override with
+    | Some source -> Some source
+    | None -> source_of_cmt roots cmt
+  in
   let* tree, signature, root_env =
     match cmt.cmt_annots with
     | Implementation tree ->
@@ -945,7 +951,9 @@ let load cache roots ~shape_roots artifact cancel =
   in
   let text = read source in
   let loadpath = List.map cmt.cmt_loadpath ~f:(absolute cmt.cmt_builddir) in
-  let loadpath = Filename.dirname artifact :: loadpath in
+  let loadpath =
+    Filename.dirname artifact :: Option.value loadpath_override ~default:loadpath
+  in
   let config = Mconfig.initial in
   let config =
     { config with
@@ -1089,6 +1097,98 @@ let live ?cancel ~cache ~roots pipeline doc =
     signature
 ;;
 
+(* Load only the selected installed compilation units, never walk a switch.
+   Their declarations connect project UIDs to relocated .ml/.mli exports. *)
+let supporting_files cache ~files ~units ~cancel =
+  let seen = H.create 16 in
+  List.concat_map files ~f:(fun origin ->
+    List.concat_map units ~f:(fun unit_name ->
+      check_cancel cancel;
+      let owner =
+        List.find_map origin.loadpath ~f:(fun directory ->
+          List.find_map
+            [ unit_name; Stdlib.String.uncapitalize_ascii unit_name ]
+            ~f:(fun name ->
+              let cmi = Filename.concat directory (name ^ ".cmi") in
+              if Sys.file_exists cmi then Some (directory, name) else None))
+      in
+      match owner with
+      | None -> []
+      | Some (directory, name) ->
+        List.filter_map
+          [ ".cmt", ".ml"; ".cmti", ".mli" ]
+          ~f:(fun (ext, source_ext) ->
+            let artifact = canonical (Filename.concat directory (name ^ ext)) in
+            if H.mem seen artifact || Option.is_none (Installed_library.root artifact)
+            then None
+            else (
+              H.add seen artifact ();
+              try
+                let stamp = stat artifact in
+                let cmt = Cmt_format.read_cmt artifact in
+                if not (String.equal cmt.cmt_modname unit_name)
+                then None
+                else (
+                  let names =
+                    (if String.equal origin.unit_name unit_name
+                     then [ stem origin.source ^ source_ext ]
+                     else [])
+                    @ (match cmt.cmt_annots with
+                       | Implementation tree ->
+                         [ (Mbrowse.node_loc (Browse_raw.Structure tree)).loc_start
+                             .pos_fname
+                         ]
+                       | Interface tree ->
+                         [ (Mbrowse.node_loc (Browse_raw.Signature tree)).loc_start
+                             .pos_fname
+                         ]
+                       | _ -> [])
+                    @ Option.to_list cmt.cmt_sourcefile
+                  in
+                  let source =
+                    List.find_map names ~f:(fun recorded ->
+                      let basename = Filename.basename recorded in
+                      let basename =
+                        if String.is_suffix basename ~suffix:(".pp" ^ source_ext)
+                        then stem (stem basename) ^ source_ext
+                        else basename
+                      in
+                      let source = canonical (Filename.concat directory basename) in
+                      if
+                        String.is_suffix source ~suffix:source_ext
+                        && Sys.file_exists source
+                      then Some source
+                      else None)
+                  in
+                  Option.bind source ~f:(fun source ->
+                    let text_digest = digest (read source) in
+                    match H.find_opt cache.support artifact with
+                    | Some (previous, previous_text, file)
+                      when Poly.equal previous stamp
+                           && String.equal previous_text text_digest -> Some file
+                    | _ ->
+                      let file =
+                        load
+                          ~source_override:source
+                          ~loadpath_override:origin.loadpath
+                          cache
+                          [ directory ]
+                          ~shape_roots:[ directory ]
+                          artifact
+                          cancel
+                      in
+                      Option.map file ~f:(fun file ->
+                        let file = { file with digest = Some text_digest } in
+                        if Poly.equal stamp (stat artifact)
+                        then H.replace cache.support artifact (stamp, text_digest, file);
+                        file)))
+              with
+              | Cancelled -> raise Cancelled
+              | _ ->
+                H.remove cache.support artifact;
+                None))))
+;;
+
 let target_units file ~source offset =
   let occurrences =
     List.filter file.occurrences ~f:(fun o -> o.first <= offset && offset <= o.last)
@@ -1172,7 +1272,11 @@ let make_resolver files =
                ~f:(String.equal candidate.unit_name)
           && (String.equal sym.namespace "unit"
               || String.equal candidate.source direct
-              || String.is_suffix candidate.source ~suffix:("/" ^ sym.filename)))
+              || String.is_suffix candidate.source ~suffix:("/" ^ sym.filename)
+              || (Option.is_some (Installed_library.root candidate.source)
+                  && String.equal
+                       (Filename.basename candidate.source)
+                       (Filename.basename sym.filename))))
       in
       let sources =
         List.map candidates ~f:(fun candidate -> candidate.source)
