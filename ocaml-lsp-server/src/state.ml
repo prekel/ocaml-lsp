@@ -31,7 +31,7 @@ type t =
 let create ~store ~merlin ~detached ~configuration ~ocamlformat_rpc ~symbols_thread ~wheel
   =
   { init = Uninitialized
-  ; merlin_config = Merlin_config.DB.create ()
+  ; merlin_config = Merlin_config.DB.create ~worker:merlin ()
   ; store
   ; merlin = Document.Single_pipeline.create merlin
   ; detached

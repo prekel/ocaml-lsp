@@ -1,5 +1,9 @@
 # Unreleased (OCaml 4.14)
 
+- Recover Merlin environments for installed library sources from `.cmt`/`.cmti`
+  artifacts, including wrapped modules and dependencies, without querying the
+  enclosing workspace's Dune configuration.
+
 - Keep Hover working when ocamlformat-rpc dies during startup (backport of
   upstream f6aee54d).
 - Correct the line numbers in related diagnostic locations (backport of #2163).
