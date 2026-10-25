@@ -1,0 +1,11 @@
+{
+  "server_version": "dev",
+  "ocaml_version": "4.14.1",
+  "dune_version": "3.24.2",
+  "ppx_version": "3.7.0",
+  "merlin_version": "4.19-414",
+  "ppx_commit": "90b55197960f7f697a4455732b0b069a4977bd8e",
+  "server_commit": "24e2afe17f0d29830441a83f6cc1f0bf93048eb6",
+  "server_binary_sha256": "74b88ccfeebea192209e28424aa9782688b88cbac3bd5324ada160372346d70e",
+  "server_worktree_status": "M ocaml-lsp-server/src/document.ml\n M ocaml-lsp-server/src/document.mli\n M ocaml-lsp-server/src/hover_req.ml\n M ocaml-lsp-server/src/inlay_hints.ml\n M ocaml-lsp-server/src/ocaml_lsp_server.ml\n M ocaml-lsp-server/test/e2e-new/dune\n?? ocaml-lsp-server/src/source_ast.ml\n?? ocaml-lsp-server/src/source_ast.mli\n?? ocaml-lsp-server/test/e2e-new/ppx_source_fixture/\n?? ocaml-lsp-server/test/e2e-new/ppx_source_hints.ml\n?? ocaml-lsp-server/test/e2e-new/ppx_source_locations/\n?? reproductions/"
+}

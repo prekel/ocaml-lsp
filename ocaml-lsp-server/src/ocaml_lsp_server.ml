@@ -393,11 +393,16 @@ let text_document_lens (state : State.t) { CodeLensParams.textDocument = { uri }
   | `Other -> Fiber.return []
   | `Merlin m when Document.Merlin.kind m = Intf -> Fiber.return []
   | `Merlin doc ->
-    let+ outline = Document.Merlin.dispatch_exn ~name:"outline" doc Outline in
+    let+ source, outline =
+      Document.Merlin.with_pipeline_exn ~name:"outline" doc (fun pipeline ->
+        let source = Source_ast.create (Mpipeline.reader_parsetree pipeline) in
+        source, Query_commands.dispatch pipeline Outline)
+    in
     let rec symbol_info_of_outline_item (item : Query_protocol.item) =
       let children = List.concat_map item.children ~f:symbol_info_of_outline_item in
       match item.outline_type with
       | None -> children
+      | Some _ when not (Source_ast.contains_outline source item) -> children
       | Some typ ->
         let loc = item.location in
         let info =

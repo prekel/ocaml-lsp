@@ -102,7 +102,8 @@ module Merlin : sig
     }
 
   val type_enclosing
-    :  ?name:string
+    :  ?source_type:Source_ast.type_target
+    -> ?name:string
     -> t
     -> Msource.position
     -> (* verbosity *) int

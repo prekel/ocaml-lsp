@@ -1,0 +1,9 @@
+{
+  "server_version": "dev",
+  "ocaml_version": "4.14.1",
+  "dune_version": "3.24.2",
+  "ppx_version": "3.7.0",
+  "merlin_version": "4.19-414",
+  "ppx_commit": "90b55197960f7f697a4455732b0b069a4977bd8e",
+  "server_commit": "24e2afe17f0d29830441a83f6cc1f0bf93048eb6"
+}

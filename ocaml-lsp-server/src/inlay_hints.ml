@@ -35,6 +35,7 @@ let compute (state : State.t) { InlayHintParams.range; textDocument = { uri }; _
         |> Option.value ~default:false
       in
       Document.Merlin.with_pipeline_exn ~name:"inlay-hints" doc (fun pipeline ->
+        let source = Source_ast.create (Mpipeline.reader_parsetree pipeline) in
         let start = range.start |> Position.logical
         and stop = range.end_ |> Position.logical in
         let command =
@@ -46,7 +47,11 @@ let compute (state : State.t) { InlayHintParams.range; textDocument = { uri }; _
             , hint_function_params
             , not inside_test )
         in
-        let hints = Query_commands.dispatch pipeline command in
+        let hints =
+          Query_commands.dispatch pipeline command
+          |> List.filter ~f:(fun (position, _) ->
+            Source_ast.has_pattern_end source position)
+        in
         List.filter_map
           ~f:(fun (pos, label) ->
             let open Option.O in

@@ -1,0 +1,4 @@
+(library
+ (name ppx_source_locations)
+ (kind ppx_rewriter)
+ (libraries ppxlib))

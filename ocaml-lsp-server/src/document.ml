@@ -397,7 +397,7 @@ module Merlin = struct
     ; syntax_doc : Query_protocol.syntax_doc_result option
     }
 
-  let type_enclosing ?name doc pos verbosity ~with_syntax_doc =
+  let type_enclosing ?source_type ?name doc pos verbosity ~with_syntax_doc =
     with_pipeline_exn ?name doc (fun pipeline ->
       let command = Query_protocol.Type_enclosing (None, pos, Some 0) in
       let pipeline =
@@ -411,10 +411,17 @@ module Merlin = struct
           in
           Mpipeline.make config source
       in
-      let res = Query_commands.dispatch pipeline command in
+      let res =
+        match source_type with
+        | None ->
+          (match Query_commands.dispatch pipeline command with
+           | (loc, `String typ, _) :: _ -> Some (loc, typ)
+           | _ -> None)
+        | Some target -> Source_ast.type_enclosing pipeline target pos
+      in
       match res with
-      | [] | (_, `Index _, _) :: _ -> None
-      | (loc, `String typ, _) :: _ ->
+      | None -> None
+      | Some (loc, typ) ->
         let doc = doc_comment pipeline pos in
         let syntax_doc =
           match with_syntax_doc with

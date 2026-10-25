@@ -15,6 +15,7 @@ let environment_mode =
 
 let hover_at_cursor parsetree (`Logical (cursor_line, cursor_col)) =
   let result = ref None in
+  let type_declaration_at_cursor = ref None in
   let is_at_cursor ({ loc_start; loc_end; _ } : Ocaml_parsing.Location.t) =
     let start_col = loc_start.pos_cnum - loc_start.pos_bol in
     let end_col = loc_end.pos_cnum - loc_end.pos_bol in
@@ -109,12 +110,18 @@ let hover_at_cursor parsetree (`Logical (cursor_line, cursor_col)) =
   in
   (* Hover a type *)
   let typ (_ : Ast_iterator.iterator) (typ : Parsetree.core_type) =
-    if is_at_cursor typ.ptyp_loc then result := Some `Type_enclosing
+    if is_at_cursor typ.ptyp_loc
+    then
+      result
+      := Some
+           (match !type_declaration_at_cursor with
+            | None -> `Type_enclosing
+            | Some declaration -> `Source_type (Source_ast.Core_type declaration))
   in
   (* Hover a type declaration *)
   let type_declaration (self : Ast_iterator.iterator) (decl : Parsetree.type_declaration) =
     if is_at_cursor decl.ptype_name.loc
-    then result := Some `Type_enclosing
+    then result := Some (`Source_type (Source_ast.Declaration decl))
     else if is_at_cursor decl.ptype_loc
     then (
       let attribute_at_cursor =
@@ -126,7 +133,11 @@ let hover_at_cursor parsetree (`Logical (cursor_line, cursor_col)) =
            bail. *)
         if is_at_cursor attr.attr_name.loc
         then result := Some (`Ppx_typedef_attr (decl, attr))
-      | None -> Ast_iterator.default_iterator.type_declaration self decl)
+      | None ->
+        let previous = !type_declaration_at_cursor in
+        type_declaration_at_cursor := Some decl;
+        Ast_iterator.default_iterator.type_declaration self decl;
+        type_declaration_at_cursor := previous)
   in
   (* Hover a module identifier *)
   let module_expr (self : Ast_iterator.iterator) (expr : Parsetree.module_expr) =
@@ -248,6 +259,7 @@ let format_ppx_expansion ~ppx ~expansion =
 ;;
 
 let type_enclosing_hover
+      ~source_type
       ~(server : State.t Server.t)
       ~(doc : Document.t)
       ~with_syntax_doc
@@ -282,6 +294,7 @@ let type_enclosing_hover
   in
   let* type_enclosing =
     Document.Merlin.type_enclosing
+      ?source_type
       ~name:"hover-enclosing"
       merlin
       (Position.logical position)
@@ -445,13 +458,26 @@ let handle server { HoverParams.textDocument = { uri }; position; _ } mode =
       in
       (match hover_at_cursor parsetree (Position.logical position) with
        | None -> Fiber.return None
-       | Some `Type_enclosing ->
+       | Some ((`Type_enclosing | `Source_type _) as kind) ->
          let with_syntax_doc =
            match state.configuration.data.syntax_documentation with
            | Some { enable = true } -> true
            | Some _ | None -> false
          in
-         type_enclosing_hover ~server ~doc ~merlin ~mode ~uri ~position ~with_syntax_doc
+         let source_type =
+           match kind with
+           | `Type_enclosing -> None
+           | `Source_type target -> Some target
+         in
+         type_enclosing_hover
+           ~source_type
+           ~server
+           ~doc
+           ~merlin
+           ~mode
+           ~uri
+           ~position
+           ~with_syntax_doc
        | Some ((`Ppx_expr _ | `Ppx_typedef_attr _) as ppx_kind) ->
          let+ ppx_parsetree =
            Document.Merlin.with_pipeline_exn

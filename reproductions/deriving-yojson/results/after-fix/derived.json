@@ -1,0 +1,292 @@
+{
+  "initialize": {
+    "capabilities": {
+      "callHierarchyProvider": true,
+      "codeActionProvider": true,
+      "codeLensProvider": {
+        "resolveProvider": false
+      },
+      "completionProvider": {
+        "resolveProvider": true,
+        "triggerCharacters": [
+          ".",
+          "#"
+        ]
+      },
+      "declarationProvider": true,
+      "definitionProvider": true,
+      "documentFormattingProvider": true,
+      "documentHighlightProvider": true,
+      "documentRangeFormattingProvider": true,
+      "documentSymbolProvider": true,
+      "executeCommandProvider": {
+        "commands": [
+          "dune/promote"
+        ]
+      },
+      "experimental": {
+        "ocamllsp": {
+          "interfaceSpecificLangId": true,
+          "handleSwitchImplIntf": true,
+          "handleInferIntf": true,
+          "handleTypedHoles": true,
+          "handleJumpToTypedHole": true,
+          "handleWrappingAstNode": true,
+          "diagnostic_promotions": true,
+          "handleHoverExtended": true,
+          "handleMerlinCallCompatible": true,
+          "handleTypeEnclosing": true,
+          "handleGetDocumentation": true,
+          "handleConstruct": true,
+          "handleTypeSearch": true,
+          "handleJump": true
+        }
+      },
+      "foldingRangeProvider": true,
+      "hoverProvider": true,
+      "implementationProvider": true,
+      "inlayHintProvider": true,
+      "referencesProvider": true,
+      "renameProvider": {
+        "prepareProvider": true
+      },
+      "selectionRangeProvider": true,
+      "semanticTokensProvider": {
+        "full": {
+          "delta": true
+        },
+        "legend": {
+          "tokenModifiers": [
+            "declaration",
+            "definition",
+            "readonly",
+            "static",
+            "deprecated",
+            "abstract",
+            "async",
+            "modification",
+            "documentation",
+            "defaultLibrary"
+          ],
+          "tokenTypes": [
+            "namespace",
+            "type",
+            "class",
+            "enum",
+            "interface",
+            "struct",
+            "typeParameter",
+            "parameter",
+            "variable",
+            "property",
+            "enumMember",
+            "event",
+            "function",
+            "method",
+            "macro",
+            "keyword",
+            "modifier",
+            "comment",
+            "string",
+            "number",
+            "regexp",
+            "operator",
+            "decorator"
+          ]
+        }
+      },
+      "signatureHelpProvider": {
+        "triggerCharacters": [
+          " ",
+          "~",
+          "?",
+          ":",
+          "("
+        ]
+      },
+      "textDocumentSync": {
+        "change": 2,
+        "openClose": true,
+        "save": {
+          "includeText": false
+        },
+        "willSave": false,
+        "willSaveWaitUntil": false
+      },
+      "typeDefinitionProvider": true,
+      "workspace": {
+        "workspaceFolders": {
+          "changeNotifications": true,
+          "supported": true
+        }
+      },
+      "workspaceSymbolProvider": true
+    },
+    "serverInfo": {
+      "name": "ocamllsp",
+      "version": "dev"
+    }
+  },
+  "hover": {
+    "address": {
+      "params": {
+        "textDocument": {
+          "uri": "file:///tmp/ocamllsp-yojson-ik9nrqmv/example.ml"
+        },
+        "position": {
+          "line": 0,
+          "character": 7
+        }
+      },
+      "result": {
+        "contents": {
+          "kind": "plaintext",
+          "value": "type address = { city : string; zip : int; }"
+        },
+        "range": {
+          "end": {
+            "character": 19,
+            "line": 4
+          },
+          "start": {
+            "character": 0,
+            "line": 0
+          }
+        }
+      }
+    },
+    "t": {
+      "params": {
+        "textDocument": {
+          "uri": "file:///tmp/ocamllsp-yojson-ik9nrqmv/example.ml"
+        },
+        "position": {
+          "line": 6,
+          "character": 5
+        }
+      },
+      "result": {
+        "contents": {
+          "kind": "plaintext",
+          "value": "type t = {\n  name : string;\n  age : int;\n  address : address;\n  tags : string list;\n  nickname : string option;\n}"
+        },
+        "range": {
+          "end": {
+            "character": 19,
+            "line": 13
+          },
+          "start": {
+            "character": 0,
+            "line": 6
+          }
+        }
+      }
+    },
+    "city": {
+      "params": {
+        "textDocument": {
+          "uri": "file:///tmp/ocamllsp-yojson-ik9nrqmv/example.ml"
+        },
+        "position": {
+          "line": 1,
+          "character": 5
+        }
+      },
+      "result": null
+    },
+    "city_type": {
+      "params": {
+        "textDocument": {
+          "uri": "file:///tmp/ocamllsp-yojson-ik9nrqmv/example.ml"
+        },
+        "position": {
+          "line": 1,
+          "character": 12
+        }
+      },
+      "result": {
+        "contents": {
+          "kind": "plaintext",
+          "value": "type string\n***\nstring"
+        },
+        "range": {
+          "end": {
+            "character": 17,
+            "line": 1
+          },
+          "start": {
+            "character": 11,
+            "line": 1
+          }
+        }
+      }
+    },
+    "address_field": {
+      "params": {
+        "textDocument": {
+          "uri": "file:///tmp/ocamllsp-yojson-ik9nrqmv/example.ml"
+        },
+        "position": {
+          "line": 9,
+          "character": 5
+        }
+      },
+      "result": null
+    },
+    "deriving": {
+      "params": {
+        "textDocument": {
+          "uri": "file:///tmp/ocamllsp-yojson-ik9nrqmv/example.ml"
+        },
+        "position": {
+          "line": 4,
+          "character": 5
+        }
+      },
+      "result": {
+        "contents": {
+          "value": "(* ppx deriving expansion *)\nlet rec address_to_yojson : address -> Yojson.Safe.t =\n  ((let open! ((Ppx_deriving_yojson_runtime)[@ocaml.warning \"-A\"]) in\n      fun x ->\n        let fields = [] in\n        let fields =\n          (\"zip\", ((fun (x : Ppx_deriving_runtime.int) -> `Int x) x.zip)) ::\n          fields in\n        let fields =\n          (\"city\",\n            ((fun (x : Ppx_deriving_runtime.string) -> `String x) x.city))\n          :: fields in\n        `Assoc fields)\n  [@ocaml.warning \"-A\"])[@@ocaml.warning \"-39\"]\nand address_of_yojson\n  : Yojson.Safe.t -> address Ppx_deriving_yojson_runtime.error_or =\n  ((let open! ((Ppx_deriving_yojson_runtime)[@ocaml.warning \"-A\"]) in\n      function\n      | `Assoc xs ->\n          let rec loop xs ((arg0, arg1) as _state) =\n            match xs with\n            | (\"city\", x)::xs ->\n                loop xs\n                  ((Yojson_error.at_field \"city\"\n                      ((function\n                        | `String x -> Result.Ok x\n                        | json -> Yojson_error.expected \"string\" json) x)),\n                    arg1)\n            | (\"zip\", x)::xs ->\n                loop xs\n                  (arg0,\n                    (Yojson_error.at_field \"zip\"\n                       ((function\n                         | `Int x -> Result.Ok x\n                         | json -> Yojson_error.expected \"int\" json) x)))\n            | [] ->\n                arg1 >>=\n                  ((fun arg1 ->\n                      arg0 >>=\n                        (fun arg0 -> Result.Ok { city = arg0; zip = arg1 })))\n            | (key, _)::xs -> Yojson_error.unknown_field key in\n          loop xs\n            ((Result.Error \"$.city: missing required field \\\"city\\\"\"),\n              (Result.Error \"$.zip: missing required field \\\"zip\\\"\"))\n      | json -> Yojson_error.expected \"object\" json)\n  [@ocaml.warning \"-A\"])[@@ocaml.warning \"-39\"]\nlet _ = address_to_yojson\nlet _ = address_of_yojson",
+          "language": "ocaml"
+        },
+        "range": {
+          "end": {
+            "character": 19,
+            "line": 4
+          },
+          "start": {
+            "character": 0,
+            "line": 4
+          }
+        }
+      }
+    }
+  },
+  "inlayHints": [],
+  "codeLens": [],
+  "notifications": [
+    {
+      "params": {
+        "message": "failed to poll dune registry.\nUnix.Unix_error(Unix.ENOENT, \"stat\", \"/run/user/1000/dune/rpc\")\nMaybe you are not running dune in watch mode?\nHint: $ dune build -w",
+        "type": 2
+      },
+      "method": "window/logMessage",
+      "jsonrpc": "2.0"
+    },
+    {
+      "params": {
+        "message": "Unable to find 'ocamlformat-rpc' binary. Types on hover may not be well-formatted. You need to install either 'ocamlformat' of version > 0.21.0 or, otherwise, 'ocamlformat-rpc' package.",
+        "type": 3
+      },
+      "method": "window/showMessage",
+      "jsonrpc": "2.0"
+    },
+    {
+      "params": {
+        "diagnostics": [],
+        "uri": "file:///tmp/ocamllsp-yojson-ik9nrqmv/example.ml"
+      },
+      "method": "textDocument/publishDiagnostics",
+      "jsonrpc": "2.0"
+    }
+  ]
+}

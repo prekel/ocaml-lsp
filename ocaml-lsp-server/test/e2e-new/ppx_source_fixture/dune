@@ -1,0 +1,4 @@
+(library
+ (name ppx_source_fixture)
+ (preprocess
+  (pps ppx_source_locations)))
