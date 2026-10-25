@@ -1,8 +1,16 @@
 # Unreleased (OCaml 4.14)
 
-- Prefer `.mli` declarations for Go to Definition in projects and installed
-  libraries, falling back to `.ml` when the interface target is unavailable.
-  Preserve local definitions and select value names in open interfaces.
+- Keep Go to Definition directed at `.ml` and Go to Declaration at `.mli`.
+- Backport interface-type Go to Implementation from upstream #2074, adapted
+  to Merlin 4.19, including temporary document cleanup and functor results.
+- Extend Go to Implementation to values, modules and cross-file usages,
+  honoring unsaved implementation buffers and rejecting interface-only fallbacks.
+- Add Incoming and Outgoing Calls for static workspace applications, including
+  closed files, recursion, local functions and grouped call-site ranges.
+  Dependency functions remain graph leaves. See [navigation](ocaml-lsp-server/docs/navigation.md).
+- Restrict References indexing to the selected unit and its importers, reducing
+  cold and repeated search latency. Connect installed library declarations and
+  implementations to project usages without scanning an entire switch.
 
 - Recover Merlin environments for installed library sources from `.cmt`/`.cmti`
   artifacts, including wrapped modules and dependencies, without querying the

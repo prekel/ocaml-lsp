@@ -11,9 +11,15 @@ opens, and dependencies. Dependencies are matched by interface digest inside
 the installation being browsed, so the original build tree is not required.
 
 Semantic highlighting remains available, along with hover and navigation where
-the installed artifacts provide enough information. Go to Definition prefers
-declarations in `.mli` files, with a fallback to `.ml` when the interface target
-is unavailable. This preference also applies to files in the project.
+the installed artifacts provide enough information. Go to Definition locates
+`.ml` implementations; Go to Declaration locates `.mli` declarations. Go to
+Implementation resolves values, types and modules to their implementation,
+including unsaved implementation buffers.
+
+Find All References searches usages in the current workspaces, including when
+the selected symbol is in an installed library. Matching annotations for the
+selected unit connect its relocated `.ml` and `.mli` declarations to project
+usages. This does not scan every package in the switch.
 
 Without compatible annotations, the server uses the source directory and the
 standard library. Build-time preprocessors are not rerun; features requiring

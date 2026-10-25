@@ -13,7 +13,9 @@ dune build @check
 
 The server reads the active Dune build context's `.cmt` and `.cmti` files. It
 keeps a memory cache and refreshes changed, added and removed artifacts on each
-reference request. It does not start builds. Run `dune build @check` again after
+reference request. Searches first select the symbol's compiler unit, then collect
+occurrences in that unit and its importers; unrelated typed trees are skipped.
+It does not start builds. Run `dune build @check` again after
 changing files outside the editor or changing exported interfaces.
 
 Open OCaml buffers use their current, unsaved typed trees instead of the cached
@@ -26,15 +28,17 @@ The index follows compiler declarations and implementation shapes, including
 public `.ml`/`.mli` counterparts, wrapped units, module aliases, shadowing,
 values, types, modules, module types, constructors, exceptions, record fields,
 classes and class types. Results cover source files within the workspace
-folders, including closed files. Installed libraries outside those folders
-are not indexed. In a document outside the workspace, reference search remains
-local to that document.
+folders, including closed files. Selected installed library units are loaded on
+demand to connect their relocated `.ml` and `.mli` declarations to workspace
+usages. Selecting a symbol in an installed source also searches its workspace
+usages; the server does not scan the entire switch. Other documents outside the
+workspace retain local reference search.
 
 Some OCaml identities are inherently ambiguous in 4.14 artifacts. In particular,
 functor applications and structural object methods do not always identify a
 unique source declaration. The server skips uncertain matches. Errors or
-incomplete typing can also reduce the results. This index is used for reference
-search only; Rename retains its existing behavior.
+incomplete typing can also reduce the results. Call Hierarchy shares the same
+snapshot and symbol resolution; Rename retains its existing behavior.
 
 Requests support cancellation. If an open document or the workspace folders
 change during a search, the server returns `ContentModified` instead of returning
