@@ -127,6 +127,7 @@ module Single_pipeline : sig
   type t
 
   val create : Lev_fiber.Thread.t -> t
+  val run : t -> (unit -> 'a) -> 'a Fiber.t
 
   val use
     :  ?name:string
@@ -147,6 +148,16 @@ end = struct
   type t = { thread : Lev_fiber.Thread.t } [@@unboxed]
 
   let create thread = { thread }
+
+  let run t f =
+    match Lev_fiber.Thread.task t.thread ~f with
+    | Error `Stopped -> Fiber.never
+    | Ok task ->
+      let+ result = await task in
+      (match result with
+       | Ok result -> result
+       | Error exn -> Exn_with_backtrace.reraise exn)
+  ;;
 
   let use_with_config ?name t ~doc ~config ~f =
     let make_pipeline =

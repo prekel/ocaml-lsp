@@ -13,10 +13,12 @@
   including wildcard exclusions, while retaining the effective project settings.
   Preserve boundary whitespace and return edits confined to the selection.
 
-- Respect `includeDeclaration` in Find References, including shadowed bindings,
-  and return name ranges for exception declarations. Reference searches remain
-  limited to the current buffer with Merlin 4.19-414; this release does not add
-  a project index.
+- Add project-wide Find References on OCaml 4.14 using an incremental semantic
+  index of Dune `.cmt`/`.cmti` artifacts and live editor buffers. Connect public
+  declarations across `.ml`/`.mli`, preserve lexical/module identity, respect
+  `includeDeclaration`, and return identifier ranges in the negotiated encoding.
+  Closed files need a manual `dune build`; omit outdated positions and log an
+  actionable warning. See [usage and limitations](ocaml-lsp-server/docs/project-references.md).
 - Return complete identifier ranges for definition, declaration, and type
   definition targets in open documents. Return no target for builtins, unresolved
   identifiers, and other ordinary lookup misses instead of failing the request.

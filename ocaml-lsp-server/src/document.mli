@@ -27,6 +27,9 @@ module Single_pipeline : sig
   type t
 
   val create : Lev_fiber.Thread.t -> t
+
+  (** Schedule compiler work on the same worker as live Merlin queries. *)
+  val run : t -> (unit -> 'a) -> 'a Fiber.t
 end
 
 val make

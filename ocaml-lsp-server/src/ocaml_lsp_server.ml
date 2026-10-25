@@ -446,28 +446,6 @@ let selection_range
       of_enclosings position enclosings)
 ;;
 
-let references
-      (state : State.t)
-      { ReferenceParams.textDocument = { uri }; position; context; _ }
-  =
-  let doc = Document_store.get state.store uri in
-  match Document.kind doc with
-  | `Other -> Fiber.return None
-  | `Merlin doc ->
-    let+ locs =
-      Document.Merlin.with_pipeline_exn ~name:"occurrences" doc (fun pipeline ->
-        Navigation.references
-          pipeline
-          (Position.logical position)
-          ~include_declaration:context.includeDeclaration)
-    in
-    Some
-      (List.map locs ~f:(fun loc ->
-         let range = Range.of_loc loc in
-         (* using original uri because merlin is looking only in local file *)
-         { Location.uri; range }))
-;;
-
 let highlight
       (state : State.t)
       { DocumentHighlightParams.textDocument = { uri }; position; _ }
@@ -646,7 +624,9 @@ let on_request
          | Some _ | None -> Hover_req.Default
        in
        later (fun (_ : State.t) () -> Hover_req.handle rpc req mode) ())
-  | TextDocumentReferences req -> later references req
+  | TextDocumentReferences req ->
+    let doc = Document_store.get store req.textDocument.uri in
+    later (Project_references.run rpc ~doc) req
   | TextDocumentCodeLensResolve codeLens -> now codeLens
   | TextDocumentCodeLens req ->
     (match state.configuration.data.codelens with
