@@ -69,19 +69,21 @@ type shape_info =
 
 type t =
   { artifacts : (string, stamp * file) H.t
-  ; sources : (string, stamp * string) H.t
   ; shapes : (string, stamp * shape_info) H.t
   ; support : (string, stamp * string * file) H.t
   ; metadata : (string, stamp * string * string list) H.t
+  ; session : string
   ; mutable notice : string
   }
 
 let create () =
   { artifacts = H.create 128
-  ; sources = H.create 128
   ; shapes = H.create 128
   ; support = H.create 64
   ; metadata = H.create 128
+  ; session =
+      Digest.to_hex
+        (Digest.string (sprintf "%d:%f" (Unix.getpid ()) (Unix.gettimeofday ())))
   ; notice = ""
   }
 ;;
@@ -635,9 +637,10 @@ let collect
   let leading = H.create 32
   and static_bindings = H.create 32 in
   let regions = ref [] in
-  let function_type ty =
+  let rec function_type ty =
     match Types.get_desc ty with
     | Tarrow _ -> true
+    | Tpoly (ty, _) -> function_type ty
     | _ -> false
   in
   let callable identity name (loc : Loc.t) (selection : Loc.t) body =
@@ -714,6 +717,38 @@ let collect
            selection
            true;
          mark_leading identity expression
+       | Class_field
+           { cf_desc = Tcf_method (name, _, Tcfk_concrete (_, expression)); cf_loc; _ } ->
+         let identity = local "method" cf_loc in
+         callable identity name.txt cf_loc name.loc true;
+         mark_leading identity expression
+       | Class_field { cf_desc = Tcf_initializer _ | Tcf_val _; cf_loc; _ } ->
+         let identity = local "object-initializer" cf_loc in
+         let selection =
+           { cf_loc with
+             loc_end = { cf_loc.loc_start with pos_cnum = cf_loc.loc_start.pos_cnum + 1 }
+           }
+         in
+         callable
+           identity
+           (sprintf "<object init at %d>" cf_loc.loc_start.pos_lnum)
+           cf_loc
+           selection
+           true
+       | Expression { exp_desc = Texp_lazy _; exp_loc; _ } ->
+         let identity = local "lazy" exp_loc in
+         let selection =
+           { exp_loc with
+             loc_end =
+               { exp_loc.loc_start with pos_cnum = exp_loc.loc_start.pos_cnum + 4 }
+           }
+         in
+         callable
+           identity
+           (sprintf "<lazy at %d>" exp_loc.loc_start.pos_lnum)
+           exp_loc
+           selection
+           true
        | Structure structure ->
          let loc = Mbrowse.node_loc (Browse_raw.Structure structure) in
          if loc.loc_end.pos_cnum > loc.loc_start.pos_cnum
@@ -778,7 +813,13 @@ let collect
               then calls := { caller; callee; first; last } :: !calls
             | _ -> ()
           with
-          | Not_found | Ocaml_typing.Envaux.Error _ | Env.Error _ -> ())
+          | Not_found
+          | Ocaml_typing.Envaux.Error _
+          | Env.Error _
+          | Ocaml_typing.Persistent_env.Error _
+          | Ocaml_typing.Magic_numbers.Cmi.Error _
+          | Sys_error _
+          | Unix.Unix_error _ -> ())
        | _ -> ())
     tree;
   let export namespace prefix parent id uid loc =
@@ -1063,11 +1104,6 @@ let refresh ?units t ~roots ~paths ~cancel =
   H.filter_map_inplace
     (fun path info -> if H.mem present path then Some info else None)
     t.shapes;
-  let sources = H.create (List.length files) in
-  List.iter files ~f:(fun file -> H.replace sources file.source ());
-  H.filter_map_inplace
-    (fun path info -> if H.mem sources path then Some info else None)
-    t.sources;
   files, (if paths = [] then 1 else 0) + !failures
 ;;
 
@@ -1101,8 +1137,17 @@ let live ?cancel ~cache ~roots pipeline doc =
    Their declarations connect project UIDs to relocated .ml/.mli exports. *)
 let supporting_files cache ~files ~units ~cancel =
   let seen = H.create 16 in
+  let requested = H.create (List.length units) in
+  List.iter units ~f:(fun unit_name -> H.replace requested unit_name ());
   List.concat_map files ~f:(fun origin ->
-    List.concat_map units ~f:(fun unit_name ->
+    let relevant =
+      origin.unit_name
+      :: List.filter_map origin.occurrences ~f:(fun occurrence ->
+        occurrence.symbol.unit_name)
+      |> List.sort_uniq ~compare:Poly.compare
+      |> List.filter ~f:(fun unit_name -> H.mem requested unit_name)
+    in
+    List.concat_map relevant ~f:(fun unit_name ->
       check_cancel cancel;
       let owner =
         List.find_map origin.loadpath ~f:(fun directory ->
@@ -1125,68 +1170,86 @@ let supporting_files cache ~files ~units ~cancel =
               H.add seen artifact ();
               try
                 let stamp = stat artifact in
-                let cmt = Cmt_format.read_cmt artifact in
-                if not (String.equal cmt.cmt_modname unit_name)
-                then None
-                else (
-                  let names =
-                    (if String.equal origin.unit_name unit_name
-                     then [ stem origin.source ^ source_ext ]
-                     else [])
-                    @ (match cmt.cmt_annots with
-                       | Implementation tree ->
-                         [ (Mbrowse.node_loc (Browse_raw.Structure tree)).loc_start
-                             .pos_fname
-                         ]
-                       | Interface tree ->
-                         [ (Mbrowse.node_loc (Browse_raw.Signature tree)).loc_start
-                             .pos_fname
-                         ]
-                       | _ -> [])
-                    @ Option.to_list cmt.cmt_sourcefile
-                  in
-                  let source =
-                    List.find_map names ~f:(fun recorded ->
-                      let basename = Filename.basename recorded in
-                      let basename =
-                        if String.is_suffix basename ~suffix:(".pp" ^ source_ext)
-                        then stem (stem basename) ^ source_ext
-                        else basename
-                      in
-                      let source = canonical (Filename.concat directory basename) in
-                      if
-                        String.is_suffix source ~suffix:source_ext
-                        && Sys.file_exists source
-                      then Some source
-                      else None)
-                  in
-                  Option.bind source ~f:(fun source ->
-                    let text_digest = digest (read source) in
-                    match H.find_opt cache.support artifact with
-                    | Some (previous, previous_text, file)
-                      when Poly.equal previous stamp
-                           && String.equal previous_text text_digest -> Some file
-                    | _ ->
-                      let file =
-                        load
-                          ~source_override:source
-                          ~loadpath_override:origin.loadpath
-                          cache
-                          [ directory ]
-                          ~shape_roots:[ directory ]
-                          artifact
-                          cancel
-                      in
-                      Option.map file ~f:(fun file ->
-                        let file = { file with digest = Some text_digest } in
-                        if Poly.equal stamp (stat artifact)
-                        then H.replace cache.support artifact (stamp, text_digest, file);
-                        file)))
+                match H.find_opt cache.support artifact with
+                | Some (previous, previous_text, file)
+                  when Poly.equal previous stamp
+                       && String.equal previous_text (digest (read file.source)) ->
+                  Some file
+                | _ ->
+                  let cmt = Cmt_format.read_cmt artifact in
+                  if not (String.equal cmt.cmt_modname unit_name)
+                  then None
+                  else (
+                    let names =
+                      (if String.equal origin.unit_name unit_name
+                       then [ stem origin.source ^ source_ext ]
+                       else [])
+                      @ (match cmt.cmt_annots with
+                         | Implementation tree ->
+                           [ (Mbrowse.node_loc (Browse_raw.Structure tree)).loc_start
+                               .pos_fname
+                           ]
+                         | Interface tree ->
+                           [ (Mbrowse.node_loc (Browse_raw.Signature tree)).loc_start
+                               .pos_fname
+                           ]
+                         | _ -> [])
+                      @ Option.to_list cmt.cmt_sourcefile
+                    in
+                    let source =
+                      List.find_map names ~f:(fun recorded ->
+                        let basename = Filename.basename recorded in
+                        let basename =
+                          if String.is_suffix basename ~suffix:(".pp" ^ source_ext)
+                          then stem (stem basename) ^ source_ext
+                          else basename
+                        in
+                        let source = canonical (Filename.concat directory basename) in
+                        if
+                          String.is_suffix source ~suffix:source_ext
+                          && Sys.file_exists source
+                        then Some source
+                        else None)
+                    in
+                    Option.bind source ~f:(fun source ->
+                      let text_digest = digest (read source) in
+                      match H.find_opt cache.support artifact with
+                      | Some (previous, previous_text, file)
+                        when Poly.equal previous stamp
+                             && String.equal previous_text text_digest -> Some file
+                      | _ ->
+                        let file =
+                          load
+                            ~source_override:source
+                            ~loadpath_override:origin.loadpath
+                            cache
+                            [ directory ]
+                            ~shape_roots:[ directory ]
+                            artifact
+                            cancel
+                        in
+                        Option.map file ~f:(fun file ->
+                          let file =
+                            { file with digest = Some text_digest; calls = [] }
+                          in
+                          if Poly.equal stamp (stat artifact)
+                          then H.replace cache.support artifact (stamp, text_digest, file);
+                          file)))
               with
               | Cancelled -> raise Cancelled
               | _ ->
                 H.remove cache.support artifact;
                 None))))
+;;
+
+let called_units files =
+  List.concat_map files ~f:(fun file ->
+    file.unit_name
+    ::
+    (if Option.is_some (Installed_library.root file.source)
+     then []
+     else List.filter_map file.calls ~f:(fun call -> call.callee.unit_name)))
+  |> List.sort_uniq ~compare:Poly.compare
 ;;
 
 let target_units file ~source offset =
@@ -1319,8 +1382,7 @@ let make_resolver files =
       result
 ;;
 
-let lookup ~cache ~files ~overlays ~source ~offset ~include_declaration ~cancel =
-  let all = overlays @ files in
+let equivalence all cancel =
   let resolve = make_resolver all in
   let parents = H.create 1024 in
   let rec representative key =
@@ -1335,7 +1397,11 @@ let lookup ~cache ~files ~overlays ~source ~offset ~include_declaration ~cancel 
   let join a b =
     let a = representative a
     and b = representative b in
-    if not (String.equal a b) then H.replace parents a b
+    if not (String.equal a b)
+    then
+      if Stdlib.String.compare a b < 0
+      then H.replace parents b a
+      else H.replace parents a b
   in
   let exports = H.create 256 in
   List.iter all ~f:(fun file ->
@@ -1350,76 +1416,74 @@ let lookup ~cache ~files ~overlays ~source ~offset ~include_declaration ~cancel 
         match H.find_opt exports slot with
         | None -> H.add exports slot symbol
         | Some other -> join symbol other)));
+  fun file sym -> Option.map (resolve file sym) ~f:representative
+;;
+
+let current_files files overlays =
+  let stale = ref 0 in
+  let indexed =
+    List.filter files ~f:(fun file ->
+      not
+        (List.exists overlays ~f:(fun overlay -> String.equal file.source overlay.source)))
+  in
+  let valid =
+    List.filter indexed ~f:(fun file ->
+      try
+        (* Read bytes too: OCaml 4.14 stat timestamps can hide rapid same-size edits. *)
+        let actual = digest (read file.source) in
+        match file.digest with
+        | Some expected when String.equal expected actual -> true
+        | _ ->
+          incr stale;
+          false
+      with
+      | Sys_error _ | Unix.Unix_error _ ->
+        incr stale;
+        false)
+  in
+  overlays @ valid, !stale
+;;
+
+let selected_occurrences file offset =
+  let inside =
+    List.filter file.occurrences ~f:(fun o -> o.first <= offset && offset < o.last)
+  in
+  (if inside <> []
+   then inside
+   else List.filter file.occurrences ~f:(fun o -> o.last = offset))
+  |> List.sort ~compare:(fun (a : occurrence) (b : occurrence) ->
+    match Int.compare (a.last - a.first) (b.last - b.first) with
+    | Ordering.Eq ->
+      Poly.compare
+        (not a.declaration, a.symbol.namespace <> "value")
+        (not b.declaration, b.symbol.namespace <> "value")
+    | order -> order)
+;;
+
+let lookup ~cache:_ ~files ~overlays ~source ~offset ~include_declaration ~cancel =
+  let resolve = equivalence (overlays @ files) cancel in
   let current = List.find overlays ~f:(fun file -> String.equal file.source source) in
   let has_occurrence = ref false in
   let selected =
     Option.bind current ~f:(fun file ->
-      let inside =
-        List.filter file.occurrences ~f:(fun occurrence ->
-          occurrence.first <= offset && offset < occurrence.last)
-      in
-      (if inside <> []
-       then inside
-       else List.filter file.occurrences ~f:(fun occurrence -> occurrence.last = offset))
-      |> (fun occurrences ->
+      let occurrences = selected_occurrences file offset in
       has_occurrence := occurrences <> [];
-      occurrences)
-      |> List.sort ~compare:(fun (a : occurrence) (b : occurrence) ->
-        match Int.compare (a.last - a.first) (b.last - b.first) with
-        | Ordering.Eq ->
-          Poly.compare
-            (not a.declaration, a.symbol.namespace <> "value")
-            (not b.declaration, b.symbol.namespace <> "value")
-        | order -> order)
-      |> List.find_map ~f:(fun occurrence -> resolve file occurrence.symbol))
+      List.find_map occurrences ~f:(fun o -> resolve file o.symbol))
   in
-  let stale = ref 0 in
+  let valid, stale = current_files files overlays in
   let found =
     Option.map selected ~f:(fun selected ->
-      let selected = representative selected in
-      let indexed =
-        List.filter files ~f:(fun file ->
-          not
-            (List.exists overlays ~f:(fun overlay ->
-               String.equal file.source overlay.source)))
-      in
-      let valid =
-        List.filter indexed ~f:(fun file ->
-          try
-            let stamp = stat file.source in
-            let actual =
-              match H.find_opt cache.sources file.source with
-              | Some (previous, digest) when Poly.equal stamp previous -> Some digest
-              | _ ->
-                let digest = digest (read file.source) in
-                if Poly.equal stamp (stat file.source)
-                then (
-                  H.replace cache.sources file.source (stamp, digest);
-                  Some digest)
-                else None
-            in
-            match file.digest, actual with
-            | Some expected, Some actual when String.equal expected actual -> true
-            | _ ->
-              incr stale;
-              false
-          with
-          | Sys_error _ | Unix.Unix_error _ ->
-            incr stale;
-            false)
-      in
-      List.concat_map (overlays @ valid) ~f:(fun file ->
+      List.concat_map valid ~f:(fun file ->
         check_cancel cancel;
-        List.filter_map file.occurrences ~f:(fun occurrence ->
-          if occurrence.declaration && not include_declaration
+        List.filter_map file.occurrences ~f:(fun o ->
+          if o.declaration && not include_declaration
           then None
           else (
-            match resolve file occurrence.symbol with
-            | Some symbol when String.equal (representative symbol) selected ->
-              Some (file, occurrence)
+            match resolve file o.symbol with
+            | Some symbol when String.equal symbol selected -> Some (file, o)
             | _ -> None))))
   in
-  (if !has_occurrence && Option.is_none found then Some [] else found), !stale
+  (if !has_occurrence && Option.is_none found then Some [] else found), stale
 ;;
 
 let position text offset ~encoding =
@@ -1463,3 +1527,209 @@ let notice t message =
     t.notice <- message;
     true)
 ;;
+
+module Call_hierarchy = struct
+  type graph =
+    { nodes : (string, file * callable) H.t
+    ; ids : (string, string) H.t
+    ; calls : (string * string * file * int * int) list
+    ; resolve : file -> symbol -> string option
+    ; files : file list
+    ; snapshot : string
+    ; session : string
+    }
+
+  let in_project roots file =
+    Option.is_none (Installed_library.root file.source)
+    && List.exists roots ~f:(fun root -> under root file.source)
+  ;;
+
+  let create ~(cache : t) ~files ~overlays ~roots ~cancel =
+    let resolve = equivalence (overlays @ files) cancel in
+    let valid, stale = current_files files overlays in
+    let nodes = H.create 128 in
+    let rank file c =
+      ( not (in_project roots file && c.body)
+      , not c.body
+      , not (String.is_suffix file.source ~suffix:".ml")
+      , file.source
+      , c.selection_first )
+    in
+    List.iter valid ~f:(fun file ->
+      check_cancel cancel;
+      List.iter file.callables ~f:(fun c ->
+        Option.iter (resolve file c.identity) ~f:(fun key ->
+          match H.find_opt nodes key with
+          | Some (previous_file, previous)
+            when Poly.compare (rank previous_file previous) (rank file c) <> Ordering.Gt
+            -> ()
+          | _ -> H.replace nodes key (file, c))));
+    let calls =
+      List.concat_map valid ~f:(fun file ->
+        if (not (in_project roots file)) && roots <> []
+        then []
+        else if Option.is_some (Installed_library.root file.source)
+        then []
+        else
+          List.filter_map file.calls ~f:(fun call ->
+            check_cancel cancel;
+            match resolve file call.caller, resolve file call.callee with
+            | Some caller, Some callee when H.mem nodes caller && H.mem nodes callee ->
+              Some (caller, callee, file, call.first, call.last)
+            | _ -> None))
+    in
+    let inputs =
+      List.map valid ~f:(fun file -> file.source, digest file.text)
+      |> List.sort_uniq ~compare:Poly.compare
+    in
+    let artifacts =
+      List.filter_map files ~f:(fun file ->
+        Option.map file.artifact ~f:(fun path ->
+          ( path
+          , try Some (stat path) with
+            | Sys_error _ | Unix.Unix_error _ -> None )))
+      |> List.sort_uniq ~compare:Poly.compare
+    in
+    let snapshot = digest (Marshal.to_string (roots, inputs, artifacts) []) in
+    let ids = H.create (H.length nodes) in
+    H.iter (fun key _ -> H.replace ids (digest key) key) nodes;
+    ( { nodes; ids; calls; resolve; files = valid; snapshot; session = cache.session }
+    , stale )
+  ;;
+
+  let range file first last ~encoding =
+    Range.create
+      ~start:(position file.text first ~encoding)
+      ~end_:(position file.text last ~encoding)
+  ;;
+
+  let item graph ~encoding key =
+    let file, c = H.find graph.nodes key in
+    let data =
+      `Assoc
+        [ "version", `Int 1
+        ; "session", `String graph.session
+        ; "snapshot", `String graph.snapshot
+        ; "id", `String (digest key)
+        ]
+    in
+    Lsp.Types.CallHierarchyItem.create
+      ~data
+      ~name:c.name
+      ~kind:
+        (if c.identity.namespace = "method"
+         then SymbolKind.Method
+         else SymbolKind.Function)
+      ~detail:file.unit_name
+      ~uri:(Uri.of_path file.source)
+      ~range:(range file c.first c.last ~encoding)
+      ~selectionRange:(range file c.selection_first c.selection_last ~encoding)
+      ()
+  ;;
+
+  let compare_item (a : Lsp.Types.CallHierarchyItem.t) (b : Lsp.Types.CallHierarchyItem.t)
+    =
+    match Poly.compare (Uri.to_string a.uri) (Uri.to_string b.uri) with
+    | Ordering.Eq -> Range.compare a.selectionRange b.selectionRange
+    | order -> order
+  ;;
+
+  let prepare graph ~encoding ~source ~offset =
+    let file = List.find graph.files ~f:(fun file -> String.equal file.source source) in
+    match file with
+    | None -> []
+    | Some file ->
+      let selected =
+        List.find_map (selected_occurrences file offset) ~f:(fun o ->
+          Option.bind (graph.resolve file o.symbol) ~f:(fun key ->
+            if H.mem graph.nodes key then Some key else None))
+      in
+      let selected =
+        match selected with
+        | Some _ -> selected
+        | None ->
+          List.filter file.callables ~f:(fun c -> c.first <= offset && offset <= c.last)
+          |> List.sort ~compare:(fun (a : callable) b ->
+            Int.compare (a.last - a.first) (b.last - b.first))
+          |> List.find_map ~f:(fun c -> graph.resolve file c.identity)
+      in
+      (match selected with
+       | Some key when H.mem graph.nodes key -> [ item graph ~encoding key ]
+       | _ -> [])
+  ;;
+
+  let invalid () =
+    Jsonrpc.Response.Error.raise
+      (Jsonrpc.Response.Error.make
+         ~code:InvalidParams
+         ~message:"Invalid OCaml call hierarchy item"
+         ())
+  ;;
+
+  let decode (selected : Lsp.Types.CallHierarchyItem.t) =
+    let field name fields =
+      match List.assoc fields name with
+      | Some (`String value) -> value
+      | _ -> invalid ()
+    in
+    let session, snapshot, id =
+      match selected.data with
+      | Some (`Assoc fields) when List.assoc fields "version" = Some (`Int 1) ->
+        field "session" fields, field "snapshot" fields, field "id" fields
+      | _ -> invalid ()
+    in
+    session, snapshot, id
+  ;;
+
+  let validate ~(cache : t) item =
+    let session, _, _ = decode item in
+    if not (String.equal session cache.session) then invalid ()
+  ;;
+
+  let identify graph selected =
+    let session, snapshot, id = decode selected in
+    if not (String.equal session graph.session) then invalid ();
+    if not (String.equal snapshot graph.snapshot)
+    then
+      Jsonrpc.Response.Error.raise
+        (Jsonrpc.Response.Error.make
+           ~code:ContentModified
+           ~message:"The call hierarchy is outdated; prepare it again"
+           ());
+    match H.find_opt graph.ids id with
+    | Some key ->
+      let file, _ = H.find graph.nodes key in
+      if not (Uri.equal selected.uri (Uri.of_path file.source)) then invalid ();
+      key
+    | None -> invalid ()
+  ;;
+
+  let grouped graph ~encoding selected ~incoming =
+    let selected = identify graph selected in
+    let groups = H.create 16 in
+    List.iter graph.calls ~f:(fun (caller, callee, file, first, last) ->
+      if String.equal (if incoming then callee else caller) selected
+      then (
+        let key = if incoming then caller else callee in
+        let range = range file first last ~encoding in
+        H.replace groups key (range :: Option.value (H.find_opt groups key) ~default:[])));
+    H.fold
+      (fun key ranges acc ->
+         (item graph ~encoding key, List.sort_uniq ranges ~compare:Range.compare) :: acc)
+      groups
+      []
+    |> List.sort ~compare:(fun (a, _) (b, _) -> compare_item a b)
+  ;;
+
+  let incoming graph ~encoding item =
+    grouped graph ~encoding item ~incoming:true
+    |> List.map ~f:(fun (from, fromRanges) ->
+      Lsp.Types.CallHierarchyIncomingCall.create ~from ~fromRanges)
+  ;;
+
+  let outgoing graph ~encoding item =
+    grouped graph ~encoding item ~incoming:false
+    |> List.map ~f:(fun (to_, fromRanges) ->
+      Lsp.Types.CallHierarchyOutgoingCall.create ~to_ ~fromRanges)
+  ;;
+end

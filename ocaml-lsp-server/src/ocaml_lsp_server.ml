@@ -141,6 +141,7 @@ let initialize_info (client_capabilities : ClientCapabilities.t) : InitializeRes
       ~definitionProvider:(`Bool true)
       ~typeDefinitionProvider:(`Bool true)
       ~implementationProvider:(`Bool true)
+      ~callHierarchyProvider:(`Bool true)
       ~completionProvider
       ~signatureHelpProvider
       ~codeActionProvider
@@ -668,9 +669,9 @@ let on_request
   | SemanticTokensFull p -> later Semantic_highlighting.on_request_full p
   | SemanticTokensDelta p -> later Semantic_highlighting.on_request_full_delta p
   | TextDocumentMoniker _ -> not_supported ()
-  | TextDocumentPrepareCallHierarchy _ -> not_supported ()
-  | CallHierarchyIncomingCalls _ -> not_supported ()
-  | CallHierarchyOutgoingCalls _ -> not_supported ()
+  | TextDocumentPrepareCallHierarchy params -> later (Call_hierarchy.prepare rpc) params
+  | CallHierarchyIncomingCalls params -> later (Call_hierarchy.incoming rpc) params
+  | CallHierarchyOutgoingCalls params -> later (Call_hierarchy.outgoing rpc) params
   | SemanticTokensRange _ -> not_supported ()
   | LinkedEditingRange _ -> not_supported ()
   | WillCreateFiles _ -> not_supported ()
