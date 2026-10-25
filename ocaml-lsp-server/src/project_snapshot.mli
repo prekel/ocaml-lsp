@@ -15,6 +15,7 @@ val run
   -> State.t
   -> doc:Document.t
   -> ?position:Position.t
+  -> ?include_importers:bool
   -> (roots:string list
       -> files:Reference_index.file list
       -> overlays:Reference_index.file list

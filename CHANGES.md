@@ -1,6 +1,11 @@
 # Unreleased (OCaml 4.14)
 
 - Keep Go to Definition directed at `.ml` and Go to Declaration at `.mli`.
+- Resolve project definitions and declarations through compiler identities,
+  including jumps between `.ml` bindings and `.mli` declarations. Use current
+  unsaved target buffers, select complete names in closed files, handle Unicode
+  positions, and skip outdated closed-file targets. Fix type-definition lookup
+  through explicitly annotated polymorphic patterns in Merlin 4.19.
 - Backport interface-type Go to Implementation from upstream #2074, adapted
   to Merlin 4.19, including temporary document cleanup and functor results.
 - Extend Go to Implementation to values, modules and cross-file usages,

@@ -10,6 +10,14 @@
 | Incoming Calls | Callers of the selected callable, grouped with their call sites. |
 | Outgoing Calls | Direct callees of the selected callable, grouped with their call sites. |
 
+Definition and Declaration use compiler identities across project files,
+including closed files. On an exported `.ml` binding, Go to Declaration opens
+its `.mli` declaration; on a `.mli` declaration, Go to Definition opens its body.
+Targets use complete identifier ranges and the current text of unsaved buffers.
+Private and shadowed bindings do not acquire a counterpart just because their
+names match an exported declaration. A jump indexes the selected unit without
+traversing its importers.
+
 Go to Implementation follows named modules, includes, aliases and functor
 results. It honors open implementation buffers and returns no body for an
 interface-only module. It does not search for every module or class satisfying

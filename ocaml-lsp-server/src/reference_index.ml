@@ -963,6 +963,18 @@ let source_of_cmt roots cmt =
   in
   List.find_map candidates ~f:(fun path ->
     let path = canonical path in
+    let path =
+      List.find_map roots ~f:(fun root ->
+        Option.bind
+          (String.drop_prefix path ~prefix:(root ^ "/_build/"))
+          ~f:(fun relative ->
+            match String.split relative ~on:'/' with
+            | _context :: (_ :: _ as relative) ->
+              let original = Filename.concat root (String.concat ~sep:"/" relative) in
+              if Sys.file_exists original then Some (canonical original) else None
+            | _ -> None))
+      |> Option.value ~default:path
+    in
     if
       List.exists roots ~f:(fun root -> under root path)
       && (not
@@ -1041,7 +1053,7 @@ let load ?source_override ?loadpath_override cache roots ~shape_roots artifact c
     }
 ;;
 
-let refresh ?units t ~roots ~paths ~cancel =
+let refresh ?units ?(include_importers = true) t ~roots ~paths ~cancel =
   let directories = build_roots roots paths in
   let paths = artifacts directories cancel in
   let present = H.create (List.length paths) in
@@ -1068,7 +1080,8 @@ let refresh ?units t ~roots ~paths ~cancel =
               cmt.cmt_modname, imports
           in
           List.exists units ~f:(fun unit ->
-            String.equal unit unit_name || List.mem imports unit ~equal:String.equal)
+            String.equal unit unit_name
+            || (include_importers && List.mem imports unit ~equal:String.equal))
       in
       if relevant
       then (
@@ -1484,6 +1497,47 @@ let lookup ~cache:_ ~files ~overlays ~source ~offset ~include_declaration ~cance
             | _ -> None))))
   in
   (if !has_occurrence && Option.is_none found then Some [] else found), stale
+;;
+
+let locate ~files ~overlays ~source ~offset ~implementation ~cancel =
+  let resolve = equivalence (overlays @ files) cancel in
+  let current = List.find overlays ~f:(fun file -> String.equal file.source source) in
+  let selected =
+    Option.bind current ~f:(fun file ->
+      List.find_map (selected_occurrences file offset) ~f:(fun o -> resolve file o.symbol))
+  in
+  let valid, stale = current_files files overlays in
+  let declarations files selected =
+    List.concat_map files ~f:(fun file ->
+      check_cancel cancel;
+      List.filter_map file.occurrences ~f:(fun o ->
+        if
+          o.declaration
+          && Option.value_map
+               (resolve file o.symbol)
+               ~default:false
+               ~f:(String.equal selected)
+        then Some (file, o)
+        else None))
+  in
+  let targets =
+    Option.bind selected ~f:(fun selected ->
+      let candidates = declarations valid selected in
+      if candidates = [] && declarations (overlays @ files) selected = []
+      then None
+      else (
+        let preferred =
+          List.filter candidates ~f:(fun (file, _) ->
+            String.is_suffix
+              file.source
+              ~suffix:(if implementation then ".ml" else ".mli"))
+        in
+        let candidates = if preferred = [] then candidates else preferred in
+        Some
+          (List.filter candidates ~f:(fun (file, o) ->
+             not (String.equal source file.source && o.first <= offset && offset <= o.last)))))
+  in
+  targets, stale
 ;;
 
 let position text offset ~encoding =

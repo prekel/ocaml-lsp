@@ -637,11 +637,16 @@ let on_request
   | TextDocumentHighlight req -> later highlight req
   | DocumentSymbol { textDocument = { uri }; _ } -> later document_symbol uri
   | TextDocumentDeclaration { textDocument = { uri }; position } ->
-    later (fun state () -> Definition_query.run `Declaration state uri position) ()
+    let doc = Document_store.get store uri in
+    later (fun state () -> Definition_query.run rpc ~doc `Declaration state position) ()
   | TextDocumentDefinition { textDocument = { uri }; position; _ } ->
-    later (fun state () -> Definition_query.run `Definition state uri position) ()
+    let doc = Document_store.get store uri in
+    later (fun state () -> Definition_query.run rpc ~doc `Definition state position) ()
   | TextDocumentTypeDefinition { textDocument = { uri }; position; _ } ->
-    later (fun state () -> Definition_query.run `Type_definition state uri position) ()
+    let doc = Document_store.get store uri in
+    later
+      (fun state () -> Definition_query.run rpc ~doc `Type_definition state position)
+      ()
   | TextDocumentCompletion params -> later (fun _ () -> Compl.complete state params) ()
   | TextDocumentPrepareRename req -> later Rename.prepare req
   | TextDocumentRename req -> later Rename.rename req

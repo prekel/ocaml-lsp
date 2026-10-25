@@ -16,6 +16,7 @@ val under : string -> string -> bool
 
 val refresh
   :  ?units:string list
+  -> ?include_importers:bool
   -> t
   -> roots:string list
   -> paths:string list
@@ -52,6 +53,18 @@ val lookup
   -> (file * occurrence) list option * int
 
 val location : encoding:[ `UTF8 | `UTF16 ] -> file * occurrence -> Location.t
+
+(** Select source declarations through the same identities as references,
+    preferring implementations or interfaces and excluding the selected origin. *)
+val locate
+  :  files:file list
+  -> overlays:file list
+  -> source:string
+  -> offset:int
+  -> implementation:bool
+  -> cancel:Fiber.Cancel.t option
+  -> (file * occurrence) list option * int
+
 val position : string -> int -> encoding:[ `UTF8 | `UTF16 ] -> Position.t
 val notice : t -> string -> bool
 

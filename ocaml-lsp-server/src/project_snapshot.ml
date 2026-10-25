@@ -55,7 +55,7 @@ let with_document (state : State.t) uri f =
        Fiber.finalize (fun () -> f doc) ~finally:(fun () -> Document.close doc))
 ;;
 
-let run rpc (state : State.t) ~doc ?position f =
+let run rpc (state : State.t) ~doc ?position ?(include_importers = true) f =
   let source = Reference_index.canonical (Uri.to_path (Document.uri doc)) in
   let roots_before = roots state source in
   let* cancel = Server.cancel_token () in
@@ -108,6 +108,7 @@ let run rpc (state : State.t) ~doc ?position f =
               else
                 Reference_index.refresh
                   ?units
+                  ~include_importers
                   state.reference_index
                   ~roots:roots_before
                   ~paths:(Mconfig.build_path config @ Mconfig.cmt_path config)
