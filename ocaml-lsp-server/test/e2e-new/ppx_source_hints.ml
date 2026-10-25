@@ -89,7 +89,7 @@ let%expect_test "generated locations do not replace source types or bindings" =
     {
       "contents": {
         "kind": "plaintext",
-        "value": "type address = { city : string }\n***\nThe user's record, not the generated converter."
+        "value": "type address = { city : string }\n\n(* ppx deriving signature *)\nval source_address : string list -> string list\n***\nThe user's record, not the generated converter."
       },
       "range": {
         "end": { "character": 62, "line": 1 },
@@ -104,7 +104,10 @@ let%expect_test "generated locations do not replace source types or bindings" =
       }
     }
     {
-      "contents": { "kind": "plaintext", "value": "type t = { name : string }" },
+      "contents": {
+        "kind": "plaintext",
+        "value": "type t = { name : string }\n\n(* ppx deriving signature *)\nval source_t : string list -> string list\nmodule Generated : sig val convert : string list -> string list end"
+      },
       "range": {
         "end": { "character": 58, "line": 6 },
         "start": { "character": 2, "line": 6 }
@@ -122,7 +125,7 @@ let%expect_test "generated locations do not replace source types or bindings" =
     }
     {
       "contents": {
-        "value": "(* ppx deriving expansion *)\nlet source_address input = (input : string list)",
+        "value": "(* ppx deriving signature *)\nval source_address : string list -> string list",
         "language": "ocaml"
       },
       "range": {

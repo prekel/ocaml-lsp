@@ -48,6 +48,10 @@ let initialize_info (client_capabilities : ClientCapabilities.t) : InitializeRes
              ; Action_add_rec.t
              ; Action_inline.t
              ]
+        |> (fun kinds ->
+        if Action_show_ppx_expansion.available client_capabilities
+        then Action_show_ppx_expansion.kind :: kinds
+        else kinds)
         |> List.sort_uniq ~compare:Poly.compare
       in
       `CodeActionOptions (CodeActionOptions.create ~codeActionKinds ())
@@ -113,6 +117,7 @@ let initialize_info (client_capabilities : ClientCapabilities.t) : InitializeRes
           view_metrics_command_name
           :: Action_open_related.command_name
           :: Action_jump.command_name
+          :: Action_show_ppx_expansion.command_name
           :: Document_text_command.command_name
           :: Merlin_config_command.command_name
           :: Dune.commands
@@ -581,6 +586,11 @@ let on_request
       later (fun _state server -> Action_open_related.command_run server command) server
     else if String.equal command.command Action_jump.command_name
     then later (fun _state server -> Action_jump.command_run server command) server
+    else if String.equal command.command Action_show_ppx_expansion.command_name
+    then
+      later
+        (fun _state server -> Action_show_ppx_expansion.command_run server command)
+        server
     else
       later
         (fun state () ->

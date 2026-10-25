@@ -1,0 +1,11 @@
+{
+  "server_version": "dev",
+  "ocaml_version": "4.14.1",
+  "dune_version": "3.24.2",
+  "ppx_version": "3.7.0",
+  "merlin_version": "4.19-414",
+  "ppx_commit": "90b55197960f7f697a4455732b0b069a4977bd8e",
+  "server_commit": "ba3ae4fe586a42ef981207373a9a554f632b7dc6",
+  "server_binary_sha256": "7537a71927a7e36a1a9bd8c40a235022e65f57b3eaecc3edd3af7d093ff0e71a",
+  "server_worktree_status": "M README.md\n M ocaml-lsp-server/src/code_actions.ml\n M ocaml-lsp-server/src/hover_req.ml\n M ocaml-lsp-server/src/ocaml_lsp_server.ml\n M ocaml-lsp-server/test/e2e-new/dune\n M ocaml-lsp-server/test/e2e-new/ppx_source_hints.ml\n M ocaml-lsp-server/test/e2e-new/ppx_source_locations/ppx_source_locations.ml\n M ocaml-lsp-server/test/e2e-new/start_stop.ml\n M reproductions/deriving-yojson/README.md\n M reproductions/deriving-yojson/reproduce.py\n?? ocaml-lsp-server/src/code_actions/action_show_ppx_expansion.ml\n?? ocaml-lsp-server/src/code_actions/action_show_ppx_expansion.mli\n?? ocaml-lsp-server/src/ppx_deriving.ml\n?? ocaml-lsp-server/src/ppx_deriving.mli\n?? ocaml-lsp-server/test/e2e-new/ppx_deriving_actions.ml\n?? ocaml-lsp-server/test/e2e-new/ppx_source_fixture/rich.ml\n?? ocaml-lsp-server/test/e2e-new/ppx_source_fixture/rich.mli\n?? reproductions/deriving-yojson/results/deriving-ui/"
+}

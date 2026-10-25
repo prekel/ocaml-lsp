@@ -51,22 +51,41 @@ Exact server and PPX commits are recorded in `results/metadata.json`.
 
 ## After the fix
 
-The same example now returns 0 inlay hints and 0 CodeLens with or without
+The first fix returns 0 inlay hints and 0 CodeLens with or without
 `deriving`. Hover on `address` and `t` returns the original record declarations.
 Hover on the `string` field type matches the control; the generated decoder's
 `(string, string) result` no longer appears. The `deriving` attribute still shows
 the PPX expansion. Both fixtures still build and publish empty diagnostics.
 
-New runs default to `results/after-fix/`, preserving the original captures in
-`results/`. The post-fix metadata includes the server binary hash and worktree
-status because the implementation changes are not committed.
+These captures are preserved in `results/after-fix/`.
+
+## Signatures and expansion action
+
+New runs default to `results/deriving-ui/`, preserving both earlier sets of
+captures. Type hovers now append the generated signatures; attribute hovers
+show the signatures, including when pointing at the generator name `yojson`.
+The signatures contain named exported declarations, without anonymous `val _`
+entries or local helper functions.
+
+The script also requests the **Show generated code** action inside the
+attribute, executes it, and captures the resulting `window/showDocument`
+request and full expansion in `derived-expansion.ml`. It checks that this
+action is absent on the type name and in the control fixture. In an editor,
+place the cursor inside the attribute and invoke the lightbulb menu or `Ctrl+.`.
+
+The metadata includes the server binary hash and worktree status to identify
+the exact build even when implementation changes are not committed.
 
 There is also a self-contained regression test in
 `ocaml-lsp-server/test/e2e-new/ppx_source_hints.ml`. Its local PPX deliberately
 generates bindings and parameters at non-ghost locations belonging to record
 declarations and their field types. It checks source types, documentation,
 nested modules, normal function hints and CodeLens, references to generated
-functions, and expansion hover on the attribute. Run it with the existing suite:
+functions, and signature hover on the attribute. Additional tests in
+`ppx_deriving_actions.ml` cover recursive type groups, multiple generators,
+generated modules inside `include`, interface files, unsaved buffers, stale
+actions, unsupported clients, opening failures, and expansion fallback when
+type inference fails. Run these with the existing suite:
 
 ```sh
 opam exec -- dune build @ocaml-lsp-server/test/e2e-new/runtest @ocaml-lsp-server/test/runtest
@@ -80,6 +99,7 @@ opam exec -- dune build @ocaml-lsp-server/test/e2e-new/runtest @ocaml-lsp-server
   request positions, initialization capabilities, and notifications.
 - `results/*-build.log` and `results/*-server.log`: build and server output.
 - `results/after-fix/`: corresponding captures from the fixed server.
+- `results/deriving-ui/`: signature hovers, code actions, and the opened expansion.
 
 JSON positions are zero-based. Temporary project URIs in captured responses
 refer to directories removed after the run.

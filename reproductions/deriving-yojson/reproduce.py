@@ -9,6 +9,7 @@ import queue
 import subprocess
 import tempfile
 import threading
+from urllib.parse import unquote, urlparse
 
 SOURCE = """type address =
   { city : string
@@ -35,6 +36,7 @@ class Client:
         )
         self.messages = queue.Queue()
         self.notifications = []
+        self.shown_documents = []
         self.next_id = 0
         threading.Thread(target=self.read, daemon=True).start()
 
@@ -74,6 +76,12 @@ class Client:
                     result = [None for _ in message["params"]["items"]]
                 elif method == "workspace/workspaceFolders":
                     result = []
+                elif method == "window/showDocument":
+                    params = message["params"]
+                    path = Path(unquote(urlparse(params["uri"]).path))
+                    self.shown_documents.append({"params": params, "text": path.read_text()})
+                    path.unlink()
+                    result = {"success": True}
                 else:
                     result = None
                 self.send({"id": message["id"], "result": result})
@@ -97,7 +105,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ppx-root", type=Path, required=True)
     parser.add_argument("--server", type=Path, default=Path(__file__).resolve().parents[2] / "_build/default/ocaml-lsp-server/bin/main.exe")
-    parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parent / "results/after-fix")
+    parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parent / "results/deriving-ui")
     args = parser.parse_args()
     ppx_root = args.ppx_root.resolve()
     env = os.environ.copy()
@@ -148,7 +156,7 @@ def main():
                 try:
                     initialization = client.request("initialize", {
                         "processId": os.getpid(), "rootUri": root.as_uri(),
-                        "capabilities": {},
+                        "capabilities": {"window": {"showDocument": {"support": True}}},
                         "workspaceFolders": [{"uri": root.as_uri(), "name": "yojson_repro"}],
                     })
                     client.notify("initialized", {})
@@ -170,7 +178,7 @@ def main():
                     for label, line, character in [
                         ("address", 0, 7), ("t", 6, 5), ("city", 1, 5),
                         ("city_type", 1, 12), ("address_field", 9, 5),
-                        ("deriving", 4, 5),
+                        ("deriving", 4, 5), ("deriver_name", 4, 13),
                     ]:
                         params = {"textDocument": document, "position": {"line": line, "character": character}}
                         responses["hover"][label] = {"params": params, "result": client.request("textDocument/hover", params)}
@@ -179,6 +187,27 @@ def main():
                         "range": {"start": {"line": 0, "character": 0}, "end": {"line": len(source.splitlines()), "character": 0}},
                     })
                     responses["codeLens"] = client.request("textDocument/codeLens", {"textDocument": document})
+                    responses["codeActions"] = {}
+                    for label, line, character in [("type", 0, 7), ("attribute", 4, 13)]:
+                        position = {"line": line, "character": character}
+                        actions = client.request("textDocument/codeAction", {
+                            "textDocument": document,
+                            "range": {"start": position, "end": position},
+                            "context": {"diagnostics": [], "only": ["ocamllsp.showPpxExpansion"]},
+                        }) or []
+                        commands = [action["command"] for action in actions
+                                    if isinstance(action.get("command"), dict)
+                                    and action["command"]["command"] == "ocamllsp/show-ppx-expansion"]
+                        assert len(commands) == (1 if derived and label == "attribute" else 0)
+                        responses["codeActions"][label] = actions
+                        if commands:
+                            command = commands[0]
+                            responses["executeCommand"] = client.request("workspace/executeCommand", {
+                                "command": command["command"], "arguments": command["arguments"],
+                            })
+                    responses["shownDocuments"] = client.shown_documents
+                    for shown in client.shown_documents:
+                        (output / f"{name}-expansion.ml").write_text(shown["text"])
                     responses["notifications"] = client.notifications
                     (output / f"{name}.json").write_text(json.dumps(responses, indent=2) + "\n")
                     print(f"{name}: {len(responses['inlayHints'] or [])} inlay hints, {len(responses['codeLens'] or [])} lenses")

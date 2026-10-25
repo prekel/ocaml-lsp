@@ -304,6 +304,22 @@ of the value needs to be non-polymorphic to construct a meaningful value.
 Tip (for VS Code OCaml Platform users): You can construct a value using a keybinding
 <kbd>Alt</kbd>+<kbd>C</kbd> or on MacOS <kbd>Option</kbd>+<kbd>C</kbd>
 
+#### PPX deriving signatures and generated code
+
+Hovering over a type declaration with `[@@deriving ...]` shows the type followed
+by the signatures of the generated declarations. Hovering anywhere inside the
+attribute shows just the generated signatures, including their names.
+
+To inspect the full implementation, place the cursor inside `[@@deriving ...]`
+and choose **Show generated code** from the code actions menu (for example,
+<kbd>Ctrl</kbd>+<kbd>.</kbd> in VS Code). This opens a temporary `.ml` or `.mli`
+snapshot generated from the current editor buffer, including unsaved changes.
+Editing the snapshot does not change the source file. This action requires an
+editor supporting `window/showDocument`.
+
+When type errors prevent a reliable signature from being inferred, the attribute
+hover falls back to displaying the full PPX expansion.
+
 #### Syntax Documentation
 
 > since OCaml-LSP 1.18.0

@@ -60,7 +60,7 @@ let%expect_test "start/stop" =
           "codeActionKinds": [
             "quickfix", "refactor.inline", "construct",
             "destruct (enumerate cases)", "inferred_intf",
-            "put module name in identifiers",
+            "ocamllsp.showPpxExpansion", "put module name in identifiers",
             "remove module name from identifiers", "remove type annotation",
             "type-annotate"
           ]
@@ -79,8 +79,9 @@ let%expect_test "start/stop" =
         "executeCommandProvider": {
           "commands": [
             "ocamllsp/view-metrics", "ocamllsp/open-related-source",
-            "ocamllsp/merlin-jump-to-target", "ocamllsp/show-document-text",
-            "ocamllsp/show-merlin-config", "dune/promote"
+            "ocamllsp/merlin-jump-to-target", "ocamllsp/show-ppx-expansion",
+            "ocamllsp/show-document-text", "ocamllsp/show-merlin-config",
+            "dune/promote"
           ]
         },
         "experimental": {
