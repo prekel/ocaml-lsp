@@ -167,4 +167,35 @@ describe("go to implementation", () => {
     });
     expect(await query("lib.mli", "t end")).toEqual([]);
   });
+  it.each([
+    ["val", "val f : int -> int\n", "let f x = x + 1\n", "f :", 0, "f x"],
+    ["nested val", "module M : sig val f : int -> int end\n", "module M = struct let f x = x end\n", "f :", 0, "f x"],
+    ["module", "module M : sig val f : int end\n", "module M = struct let f = 1 end\n", "M :", 0, "M ="],
+    ["functor value", "module F : functor (X : sig end) -> sig val f : int end\n", "module F (X : sig end) = struct let f = 1 end\n", "f :", 0, "f ="],
+  ])("resolves %s declarations", async (_title, intf, impl, needle, inside, target) => {
+    await setup({"lib.mli": intf as string, "lib.ml": impl as string});
+    const result = await query("lib.mli", needle as string, inside as number);
+    expect(result).toHaveLength(1);
+    expect(result[0].uri).toBe(uri("lib.ml"));
+    expect(result[0].range.start.character).toBe((impl as string).indexOf(target as string));
+  });
+
+  it("resolves a use through its declaration into an unsaved implementation", async () => {
+    await setup({"lib.mli": "val f : int -> int\n", "lib.ml": "let f x = x\n", "main.ml": "module Alias = Lib\nlet x = Alias.f 1\n"});
+    open("lib.ml", "\n\nlet f x = x + 1\n");
+    const result = await query("main.ml", "Alias.f", 6);
+    expect(result).toEqual([Types.Location.create(uri("lib.ml"), Types.Range.create(2,4,2,5))]);
+  });
+
+  it("resolves functions in a module without an interface", async () => {
+    await setup({"lib.ml": "let f x = x\n", "main.ml": "let x = Lib.f 1\n"});
+    expect((await query("main.ml", "Lib.f", 4))[0].uri).toBe(uri("lib.ml"));
+  });
+
+  it("returns no implementation for val-only modules", async () => {
+    await setup({"only.mli": "val f : int -> int\n", "main.ml": "let x = Only.f 1\n"});
+    expect(await query("only.mli", "f :")).toEqual([]);
+    expect(await query("main.ml", "Only.f", 5)).toEqual([]);
+  });
+
 });
