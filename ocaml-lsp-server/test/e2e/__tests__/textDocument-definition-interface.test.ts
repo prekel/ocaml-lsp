@@ -84,17 +84,17 @@ describe("definition and declaration navigation", () => {
     return result === null ? [] : Array.isArray(result) ? result : [result];
   }
 
-  it("finds the implementation and uses its definition position", async () => {
+  it("prefers the interface and uses its declaration position", async () => {
     const result = await query("main.ml", "Lib.exported", 5);
     expect(result).toHaveLength(1);
-    expect(result[0].uri).toBe(uri("lib.ml"));
-    expect(result[0].range.start).toEqual(Types.Position.create(2, 4));
+    expect(result[0].uri).toBe(uri("lib.mli"));
+    expect(result[0].range.start).toEqual(Types.Position.create(5, 4));
   });
 
-  it("follows module aliases to the implementation", async () => {
+  it("follows module aliases to the interface", async () => {
     const result = await query("main.ml", "Alias.exported", 7);
-    expect(result.map((location) => location.uri)).toEqual([uri("lib.ml")]);
-    expect(result[0].range.start.line).toBe(2);
+    expect(result.map((location) => location.uri)).toEqual([uri("lib.mli")]);
+    expect(result[0].range.start.line).toBe(5);
   });
 
   it("uses the implementation when a module has no interface", async () => {
@@ -143,10 +143,10 @@ describe("definition and declaration navigation", () => {
     ]);
   });
 
-  it("finds implementation declarations for constructors", async () => {
+  it("finds interface declarations for constructors", async () => {
     const result = await query("main.ml", "Lib.Constructor", 6);
-    expect(result.map((location) => location.uri)).toEqual([uri("lib.ml")]);
-    expect(result[0].range.start.line).toBe(0);
+    expect(result.map((location) => location.uri)).toEqual([uri("lib.mli")]);
+    expect(result[0].range.start.line).toBe(1);
   });
 
   it("keeps the declaration request directed at the interface", async () => {

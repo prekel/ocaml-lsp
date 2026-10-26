@@ -11,6 +11,7 @@ describe("go to implementation", () => {
   let directory: string;
   let server: LanguageServer.LanguageServer | undefined;
   let texts: Record<string, string>;
+  let opened: Set<string>;
 
   afterEach(async () => {
     if (server) await LanguageServer.exit(server);
@@ -27,6 +28,7 @@ describe("go to implementation", () => {
       path.join(os.tmpdir(), "ocamllsp-implementation-"),
     );
     texts = files;
+    opened = new Set();
     fs.writeFileSync(path.join(directory, "dune-project"), "(lang dune 3.0)\n");
     const interfaceOnly = Object.keys(files)
       .filter((name) => name.endsWith(".mli") && !(name.slice(0, -1) in files))
@@ -51,6 +53,8 @@ describe("go to implementation", () => {
   }
 
   function open(name: string, text = texts[name]) {
+    if (opened.has(name)) return;
+    opened.add(name);
     texts[name] = text;
     server!.sendNotification(Protocol.DidOpenTextDocumentNotification.type, {
       textDocument: Types.TextDocumentItem.create(uri(name), "ocaml", 0, text),

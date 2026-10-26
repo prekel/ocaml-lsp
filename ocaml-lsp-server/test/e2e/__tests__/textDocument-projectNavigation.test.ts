@@ -1,4 +1,5 @@
 import * as LanguageServer from "../src/LanguageServer";
+import { CancellationTokenSource } from "vscode-jsonrpc";
 import * as Protocol from "vscode-languageserver-protocol";
 import * as Types from "vscode-languageserver-types";
 import * as fs from "fs";
@@ -16,7 +17,10 @@ describe("project definition and declaration navigation", () => {
   function uri(name: string) {
     return URI.file(path.join(directory, name)).toString();
   }
-  async function setup(files: Record<string, string> = {}) {
+  async function setup(
+    files: Record<string, string> = {},
+    encoding = "utf-16",
+  ) {
     directory = fs.mkdtempSync(path.join(os.tmpdir(), "ocamllsp-navigation-"));
     texts = {
       "lib.mli":
@@ -33,12 +37,17 @@ describe("project definition and declaration navigation", () => {
       path.join(directory, "dune"),
       "(library (name navigation) (wrapped false))\n",
     );
-    for (const [name, text] of Object.entries(texts))
+    for (const [name, text] of Object.entries(texts)) {
+      fs.mkdirSync(path.dirname(path.join(directory, name)), {
+        recursive: true,
+      });
       fs.writeFileSync(path.join(directory, name), text);
+    }
     execFileSync("dune", ["build", "--root", directory, "@check"], {
       stdio: "pipe",
     });
     server = await LanguageServer.startAndInitialize({
+      capabilities: { general: { positionEncodings: [encoding] } },
       rootUri: URI.file(directory).toString(),
       workspaceFolders: [
         { name: "project", uri: URI.file(directory).toString() },
@@ -103,7 +112,7 @@ describe("project definition and declaration navigation", () => {
   it("selects complete names in closed implementation and interface files", async () => {
     await setup();
     expect(await query("definition", "main.ml", "long_name")).toEqual([
-      target("lib.ml", "long_name"),
+      target("lib.mli", "long_name"),
     ]);
     expect(await query("declaration", "main.ml", "long_name")).toEqual([
       target("lib.mli", "long_name"),
@@ -127,13 +136,13 @@ describe("project definition and declaration navigation", () => {
   it("selects constructors and nested values in closed project sources", async () => {
     await setup();
     expect(await query("definition", "main.ml", "Lib.Constructor", 4)).toEqual([
-      target("lib.ml", "Constructor"),
+      target("lib.mli", "Constructor"),
     ]);
     expect(await query("declaration", "main.ml", "Lib.Constructor", 4)).toEqual(
       [target("lib.mli", "Constructor")],
     );
     expect(await query("definition", "main.ml", "Nested.value", 7)).toEqual([
-      target("lib.ml", "value"),
+      target("lib.mli", "value"),
     ]);
   });
   it("resolves moved unsaved target bindings by identity", async () => {
@@ -141,7 +150,7 @@ describe("project definition and declaration navigation", () => {
     open("lib.ml", "(* inserted *)\n\n" + texts["lib.ml"]);
     open("lib.mli", "(* inserted *)\n" + texts["lib.mli"]);
     expect(await query("definition", "main.ml", "long_name")).toEqual([
-      target("lib.ml", "long_name"),
+      target("lib.mli", "long_name"),
     ]);
     expect(await query("declaration", "main.ml", "long_name")).toEqual([
       target("lib.mli", "long_name"),
@@ -149,12 +158,12 @@ describe("project definition and declaration navigation", () => {
   });
   it("uses UTF-16 for both query and target positions", async () => {
     await setup({
-      "lib.ml":
-        "(* 😀 *) let long_name x = x + 1\ntype t = Constructor\nmodule Nested = struct let value = 3 end\n",
+      "lib.mli":
+        "(* 😀 *) val long_name : int -> int\ntype t = Constructor\nmodule Nested : sig val value : int end\n",
       "main.ml": 'let use = let s = "😀" in ignore s; Lib.long_name 1\n',
     });
     expect(await query("definition", "main.ml", "long_name")).toEqual([
-      target("lib.ml", "long_name"),
+      target("lib.mli", "long_name"),
     ]);
   });
   it("refines type definition ranges in closed sources", async () => {
@@ -181,15 +190,188 @@ describe("project definition and declaration navigation", () => {
       target("lib.ml", "long_name"),
     ]);
   });
-  it("does not return outdated positions in a changed closed implementation", async () => {
+  it("prefers interfaces for references inside an interface", async () => {
+    await setup({
+      "client.mli": "val value : Lib.t\n",
+      "client.ml": "let value = Lib.Constructor\n",
+    });
+    expect(await query("definition", "client.mli", "Lib.t", 4)).toEqual([
+      target("lib.mli", "t =", 0, 1),
+    ]);
+    expect(await query("definition", "lib.ml", "long_name")).toEqual([
+      target("lib.mli", "long_name"),
+    ]);
+  });
+  it("uses changed target buffers on repeated requests", async () => {
+    await setup();
+    open("lib.mli");
+    for (let version = 1; version <= 3; version++) {
+      texts["lib.mli"] = "\n" + texts["lib.mli"];
+      server!.sendNotification(
+        Protocol.DidChangeTextDocumentNotification.type,
+        {
+          textDocument: { uri: uri("lib.mli"), version },
+          contentChanges: [{ text: texts["lib.mli"] }],
+        },
+      );
+      expect(await query("definition", "main.ml", "long_name")).toEqual([
+        target("lib.mli", "long_name"),
+      ]);
+    }
+  });
+  it("keeps an open interface available after its disk source is removed", async () => {
+    await setup();
+    open("lib.mli", "\n" + texts["lib.mli"]);
+    fs.unlinkSync(path.join(directory, "lib.mli"));
+    expect(await query("definition", "main.ml", "long_name")).toEqual([
+      target("lib.mli", "long_name"),
+    ]);
+  });
+  it("observes rebuilt annotations on the next jump", async () => {
+    await setup();
+    expect(await query("definition", "main.ml", "long_name")).toEqual([
+      target("lib.mli", "long_name"),
+    ]);
+    texts["lib.mli"] = "\n" + texts["lib.mli"];
+    fs.writeFileSync(path.join(directory, "lib.mli"), texts["lib.mli"]);
+    execFileSync("dune", ["build", "--root", directory, "@check"], {
+      stdio: "pipe",
+    });
+    expect(await query("definition", "main.ml", "long_name")).toEqual([
+      target("lib.mli", "long_name"),
+    ]);
+  });
+  it("does not snapshot unrelated buffers or scan unrelated artifacts", async () => {
+    const extra = Object.fromEntries(
+      Array.from({ length: 50 }, (_, i) => [`extra${i}.ml`, "let value = 1\n"]),
+    );
+    await setup(extra);
+    for (const name of Object.keys(extra)) open(name);
+    open("main.ml");
+    // A project-wide artifact scan would try to read this malformed annotation.
+    fs.writeFileSync(
+      path.join(directory, "_build/default/unrelated.cmt"),
+      "broken",
+    );
+    const warnings: string[] = [];
+    server!.onNotification(
+      Protocol.LogMessageNotification.type,
+      ({ message }) => {
+        if (message.includes("build artifacts")) warnings.push(message);
+      },
+    );
+    let trace: { traceEvents: { name: string }[] };
+    server!.onRequest("window/showDocument", ({ uri: traceUri }) => {
+      const file = URI.parse(traceUri).fsPath;
+      trace = JSON.parse(fs.readFileSync(file, "utf8"));
+      fs.unlinkSync(file);
+      return { success: true };
+    });
+    const snapshots = async () => {
+      await server!.sendRequest("workspace/executeCommand", {
+        command: "ocamllsp/view-metrics",
+        arguments: [],
+      });
+      return trace!.traceEvents.filter(
+        (event) => event.name === "project snapshot",
+      ).length;
+    };
+    const before = await snapshots();
+    const pending = query("definition", "main.ml", "long_name");
+    server!.sendNotification(Protocol.DidChangeTextDocumentNotification.type, {
+      textDocument: { uri: uri("extra0.ml"), version: 1 },
+      contentChanges: [{ text: "let value = 2\n" }],
+    });
+    expect(await pending).toEqual([target("lib.mli", "long_name")]);
+    expect(await snapshots()).toBe(before + 1);
+    expect(warnings).toEqual([]);
+  });
+  it("keeps same-named units in separate libraries distinct", async () => {
+    await setup({
+      "other/dune": "(library (name other) (wrapped false))\n",
+      "other/lib.ml": "let long_name = true\n",
+      "other/lib.mli": "\nval long_name : bool\n",
+      "other/main.ml": "let result = Lib.long_name\n",
+    });
+    for (const name of ["main.ml", "other/main.ml", "main.ml"]) {
+      const destination = name === "main.ml" ? "lib.mli" : "other/lib.mli";
+      expect(await query("definition", name, "long_name")).toEqual([
+        target(destination, "long_name"),
+      ]);
+    }
+  });
+  it("honors UTF-8 positions for interface navigation", async () => {
+    await setup(
+      {
+        "lib.mli":
+          "(* 😀 *) val long_name : int -> int\ntype t = Constructor\nmodule Nested : sig val value : int end\n",
+        "main.ml": 'let use = let s = "😀" in ignore s; Lib.long_name 1\n',
+      },
+      "utf-8",
+    );
+    open("main.ml");
+    const character = Buffer.byteLength(
+      texts["main.ml"].split("long_name")[0],
+      "utf8",
+    );
+    const start = Buffer.byteLength(
+      texts["lib.mli"].split("long_name")[0],
+      "utf8",
+    );
+    expect(
+      await server!.sendRequest("textDocument/definition", {
+        textDocument: { uri: uri("main.ml") },
+        position: Types.Position.create(0, character),
+      }),
+    ).toEqual([
+      Types.Location.create(
+        uri("lib.mli"),
+        Types.Range.create(0, start, 0, start + 9),
+      ),
+    ]);
+  });
+  it("rejects a source changed during a jump", async () => {
+    await setup();
+    open("main.ml");
+    const pending = query("definition", "main.ml", "long_name");
+    server!.sendNotification(Protocol.DidChangeTextDocumentNotification.type, {
+      textDocument: { uri: uri("main.ml"), version: 1 },
+      contentChanges: [{ text: "\n" + texts["main.ml"] }],
+    });
+    await expect(pending).rejects.toMatchObject({ code: -32801 });
+    texts["main.ml"] = "\n" + texts["main.ml"];
+    expect(await query("definition", "main.ml", "long_name")).toEqual([
+      target("lib.mli", "long_name"),
+    ]);
+  });
+  it("cancels a jump and remains usable", async () => {
+    await setup();
+    open("main.ml");
+    const cancellation = new CancellationTokenSource();
+    const pending = server!.sendRequest(
+      "textDocument/definition",
+      {
+        textDocument: { uri: uri("main.ml") },
+        position: Types.Position.create(0, 18),
+      },
+      cancellation.token,
+    );
+    cancellation.cancel();
+    await expect(pending).rejects.toMatchObject({ code: -32800 });
+    cancellation.dispose();
+    expect(await query("definition", "main.ml", "long_name")).toEqual([
+      target("lib.mli", "long_name"),
+    ]);
+  });
+  it("does not return outdated positions in a changed closed interface", async () => {
     await setup();
     await query("definition", "main.ml", "long_name");
     fs.writeFileSync(
-      path.join(directory, "lib.ml"),
-      "(* moved on disk *)\n" + texts["lib.ml"],
+      path.join(directory, "lib.mli"),
+      "(* moved on disk *)\n" + texts["lib.mli"],
     );
     const locations = await query("definition", "main.ml", "long_name");
-    expect(locations.every((location) => location.uri !== uri("lib.ml"))).toBe(
+    expect(locations.every((location) => location.uri !== uri("lib.mli"))).toBe(
       true,
     );
   });

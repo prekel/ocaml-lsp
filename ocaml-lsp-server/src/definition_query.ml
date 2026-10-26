@@ -97,7 +97,7 @@ let fallback kind state doc position =
     let pos = logical doc position in
     let command, name =
       match kind with
-      | `Definition -> Query_protocol.Locate (None, `ML, pos), "definition"
+      | `Definition -> Query_protocol.Locate (None, `MLI, pos), "definition"
       | `Declaration -> Query_protocol.Locate (None, `MLI, pos), "declaration"
       | `Type_definition -> Query_protocol.Locate_type pos, "type definition"
     in
@@ -184,7 +184,7 @@ let fallback kind state doc position =
 
 let run rpc ~doc kind (state : State.t) position =
   let source = Reference_index.canonical (Uri.to_path (Document.uri doc)) in
-  let* indexed =
+  let indexed ~navigation =
     match Document.kind doc, kind with
     | `Other, _ -> Fiber.return None
     | _, `Type_definition -> Fiber.return None
@@ -198,6 +198,7 @@ let run rpc ~doc kind (state : State.t) position =
           ~doc
           ~position
           ~include_importers:false
+          ~navigation
           (fun ~roots:_ ~files ~overlays ~cancel ->
              let offset =
                Text_document.absolute_position (Document.text_document doc) position
@@ -208,7 +209,8 @@ let run rpc ~doc kind (state : State.t) position =
                  ~overlays
                  ~source
                  ~offset
-                 ~implementation:(kind = `Definition)
+                 ~implementation:false
+                 ~interface_to_implementation:(kind = `Definition)
                  ~cancel
              in
              ( Option.map targets ~f:(fun targets ->
@@ -219,6 +221,12 @@ let run rpc ~doc kind (state : State.t) position =
                         (Reference_index.location
                            ~encoding:(State.position_encoding state))))
              , stale ))
+  in
+  let* indexed =
+    indexed ~navigation:true
+    >>= function
+    | None -> indexed ~navigation:false
+    | result -> Fiber.return result
   in
   let* result =
     match indexed with
