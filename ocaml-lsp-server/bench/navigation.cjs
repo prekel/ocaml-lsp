@@ -1,5 +1,5 @@
 // Run from any directory after building @install and installing the e2e dependencies:
-// node navigation.cjs /path/to/ocamllsp [source.ml needle]
+// node navigation.cjs /path/to/ocamllsp [source-file needle]
 const fs = require("fs");
 const path = require("path");
 const cp = require("child_process");
@@ -87,7 +87,7 @@ async function measure(source, needle) {
     connection.sendNotification("textDocument/didOpen", {
       textDocument: {
         uri: params.textDocument.uri,
-        languageId: "ocaml",
+        languageId: path.basename(file) === "dune" ? "dune" : "ocaml",
         version: 0,
         text,
       },

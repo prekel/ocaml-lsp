@@ -1,0 +1,7 @@
+{
+  "languages": {
+    "Dune": {
+      "language_servers": ["ocamllsp"]
+    }
+  }
+}

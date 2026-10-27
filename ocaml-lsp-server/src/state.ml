@@ -26,10 +26,19 @@ type t =
   ; wheel : Lev_fiber.Timer.Wheel.t
   ; hover_extended : hover_extended
   ; navigation_syntax : Navigation_syntax.t
+  ; dune_navigation : Dune_navigation.t
   ; reference_index : Reference_index.t
   }
 
-let create ~store ~merlin ~detached ~configuration ~ocamlformat_rpc ~symbols_thread ~wheel
+let create
+      ~store
+      ~merlin
+      ~dune_navigation
+      ~detached
+      ~configuration
+      ~ocamlformat_rpc
+      ~symbols_thread
+      ~wheel
   =
   { init = Uninitialized
   ; merlin_config = Merlin_config.DB.create ~worker:merlin ()
@@ -43,6 +52,7 @@ let create ~store ~merlin ~detached ~configuration ~ocamlformat_rpc ~symbols_thr
   ; wheel
   ; hover_extended = { history = None }
   ; navigation_syntax = Navigation_syntax.create ()
+  ; dune_navigation = Dune_navigation.create dune_navigation
   ; reference_index = Reference_index.create ()
   }
 ;;

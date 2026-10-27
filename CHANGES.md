@@ -1,5 +1,10 @@
 # Unreleased (OCaml 4.14)
 
+- Add Dune Go to Definition/Declaration for local libraries, PPX libraries,
+  module lists, executable entry points, explicit file dependencies and aliases.
+  Keep a content-validated syntax index on a separate worker, honor unsaved
+  buffers and private library project scopes, and register standard LSP features
+  dynamically. Include a Zed project setting to attach the existing server to Dune.
 - Keep point navigation fast with native Merlin Locate and a bounded syntax
   cache, preferring `.mli` declarations, selecting complete names and following
   known interface declarations into `.ml`. Relocate ordinary unsaved targets by

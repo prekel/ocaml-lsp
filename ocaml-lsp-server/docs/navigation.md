@@ -43,6 +43,76 @@ menu action have the same server behavior when both send
 direct `.ml` jump. On ordinary interface declarations, Definition follows the
 known declaration into its implementation.
 
+## Dune files
+
+Go to Definition and Go to Declaration also work in `dune` files without
+running Dune or Merlin:
+
+| Dune reference | Target |
+| --- | --- |
+| `libraries`, `re_export`, `implements` | The matching local `name` or `public_name` declaration. |
+| `pps`, `staged_pps`, including `per_module` | The local PPX library declaration; arguments after `--` are ignored. |
+| `modules`, `private_modules`, `virtual_modules`, `modules_without_implementation`, `per_module` module names | The module's `.mli`, falling back to `.ml`. |
+| `name`/`names` in executable and test stanzas | The entry point's `.ml`. |
+| Literal `include`, ordered-set `:include`, `deps`, `preprocessor_deps`, `(file ...)`, named dependencies | The existing file, including unsaved open files. |
+| `(alias path/name)`, `(alias_rec path/name)` dependencies | Matching alias and rule declarations in that directory, or its descendants for `alias_rec`. |
+
+Private library names are scoped to the nearest `dune-project`; public names
+can resolve across projects in the workspace. Ambiguous declarations are
+returned as multiple locations instead of choosing arbitrarily. Module and
+file targets open at the start of the file; declaration targets select their
+complete names using the negotiated UTF-8 or UTF-16 encoding. Paths and module
+names inside `subdir` stanzas use the stanza's directory.
+
+A dedicated worker discovers and parses Dune files, separate from the Merlin
+queue. Definitions use an in-memory name index and validate the selected closed
+target's bytes on each request. Open Dune buffers override disk contents and
+are checked again before returning. Watch notifications update changed files;
+clients without watchers also rediscover files on a request after two seconds.
+Discovery skips dot directories, underscore directories (including `_build`
+and `_opam`), `node_modules` and directory symlinks. Parsing is limited to 1 MB,
+128 levels and 100,000 nodes per file.
+
+This is source configuration navigation, not an evaluation of the Dune build
+graph. Variables, globs, generated files that do not exist, installed dependency
+libraries, `select` forms and modules inherited through `include_subdirs` are
+not resolved. Literal include paths can be opened, but declarations inside
+included fragments are not indexed. Conditions and directory-selection stanzas
+are not evaluated. Comments and action strings never become declarations.
+
+For VS Code / OCaml Platform, the server dynamically registers Definition,
+Declaration and incremental document synchronization after `initialized`, when
+the client advertises support. For Zed, the existing OCaml extension needs a
+language association in project or user settings, without changing the extension:
+
+```json
+{
+  "languages": {
+    "Dune": {
+      "language_servers": ["ocamllsp"]
+    }
+  }
+}
+```
+
+This repository includes that setting in `.zed/settings.json`. Restart the
+language server after installing the new binary.
+
+The point-navigation benchmark below also accepts a Dune source file:
+
+```sh
+node ocaml-lsp-server/bench/navigation.cjs /path/to/ocamllsp \
+  ocaml-lsp-server/src/dune jsonrpc
+node ocaml-lsp-server/bench/navigation.cjs /path/to/ocamllsp \
+  ocaml-lsp-server/bin/dune ocaml_lsp_server
+```
+
+Local measurements of the installed binary on 2026-10-27: these real-source
+library jumps took 5.48 ms and 5.16 ms cold, with warm medians of 0.81 ms and
+0.73 ms (five samples each). After unsaved source edits the medians were
+1.18 ms and 1.08 ms. Traces contained
+no Merlin pipelines. These are server/IPC timings, excluding editor UI and SSH.
+
 ## Call hierarchy
 
 The graph describes statically identifiable applications, including operators,
