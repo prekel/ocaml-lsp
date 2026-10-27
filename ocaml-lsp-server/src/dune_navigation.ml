@@ -1,111 +1,6 @@
 open Import
 module H = Stdlib.Hashtbl
-
-type atom =
-  { value : string
-  ; first : int
-  ; last : int
-  }
-
-type sexp =
-  | Atom of atom
-  | List of sexp list * bool
-
-(* A small, location-preserving Dune reader. It never evaluates actions,
-   variables or includes. Incomplete lists are useful for source navigation,
-   but are never indexed as declarations. *)
-let parse text =
-  let length = String.length text in
-  let cursor = ref 0 in
-  let nodes = ref 0 in
-  let exception Invalid in
-  let whitespace = function
-    | ' ' | '\t' | '\r' | '\n' | '\012' -> true
-    | _ -> false
-  in
-  let rec skip () =
-    if !cursor < length
-    then (
-      match text.[!cursor] with
-      | ';' ->
-        while !cursor < length && text.[!cursor] <> '\n' do
-          incr cursor
-        done;
-        skip ()
-      | c when whitespace c ->
-        incr cursor;
-        skip ()
-      | _ -> ())
-  in
-  let rec sequence depth nested acc =
-    skip ();
-    if !cursor = length
-    then List.rev acc, not nested
-    else if text.[!cursor] = ')'
-    then (
-      incr cursor;
-      if nested then List.rev acc, true else raise Invalid)
-    else (
-      incr nodes;
-      if depth > 128 || !nodes > 100_000 then raise Invalid;
-      let node =
-        match text.[!cursor] with
-        | '(' ->
-          incr cursor;
-          let items, complete = sequence (depth + 1) true [] in
-          List (items, complete)
-        | '"' ->
-          incr cursor;
-          let first = !cursor in
-          if
-            !cursor + 1 < length
-            && text.[!cursor] = '\\'
-            && (text.[!cursor + 1] = '|' || text.[!cursor + 1] = '>')
-          then (
-            (* End-of-line strings are opaque: parentheses in a shell script
-               must not turn into Dune declarations or references. *)
-            while !cursor < length && text.[!cursor] <> '\n' do
-              incr cursor
-            done;
-            Atom { value = ""; first; last = !cursor })
-          else (
-            while !cursor < length && text.[!cursor] <> '"' do
-              if text.[!cursor] = '\\' then incr cursor;
-              if !cursor < length then incr cursor
-            done;
-            if !cursor = length then raise Invalid;
-            let last = !cursor in
-            incr cursor;
-            let raw = String.sub text ~pos:first ~len:(last - first) in
-            let value =
-              try Scanf.unescaped raw with
-              | Scanf.Scan_failure _ | Failure _ -> ""
-            in
-            Atom { value; first; last })
-        | _ ->
-          let first = !cursor in
-          while
-            !cursor < length
-            && (not (whitespace text.[!cursor]))
-            && not (List.mem [ '('; ')'; ';'; '"' ] text.[!cursor] ~equal:Char.equal)
-          do
-            incr cursor
-          done;
-          if !cursor = first then raise Invalid;
-          Atom
-            { value = String.sub text ~pos:first ~len:(!cursor - first)
-            ; first
-            ; last = !cursor
-            }
-      in
-      sequence depth nested (node :: acc))
-  in
-  if length > 1_000_000
-  then []
-  else (
-    try fst (sequence 0 false []) with
-    | Invalid -> [])
-;;
+open Dune_file
 
 type document =
   { text : string
@@ -125,6 +20,7 @@ type t =
   ; documents : (string, document) H.t
   ; libraries : (string, declaration list) H.t
   ; aliases : (string, declaration list) H.t
+  ; rules : (string, Dune_rule.t list) H.t
   ; mutable roots : string list
   ; mutable projects : string list
   ; mutable dirty : string list
@@ -138,6 +34,7 @@ let create thread =
   ; documents = H.create 64
   ; libraries = H.create 64
   ; aliases = H.create 32
+  ; rules = H.create 32
   ; roots = []
   ; projects = []
   ; dirty = []
@@ -213,23 +110,6 @@ let put t file text =
     true
 ;;
 
-let static value =
-  (not (String.is_empty value))
-  && Option.is_none (String.substr_index value ~pattern:"%{")
-  && not (Stdlib.String.contains value '\000')
-;;
-
-let field name fields =
-  List.find_map fields ~f:(function
-    | List (Atom key :: values, true) when String.equal key.value name -> Some values
-    | _ -> None)
-;;
-
-let single = function
-  | Some [ Atom atom ] when static atom.value -> Some atom
-  | _ -> None
-;;
-
 let project t directory =
   List.find (t.projects @ t.roots) ~f:(fun root -> under root directory)
   |> Option.value ~default:directory
@@ -238,6 +118,7 @@ let project t directory =
 let rebuild t =
   H.clear t.libraries;
   H.clear t.aliases;
+  H.clear t.rules;
   let add table file directory public atom =
     let declaration =
       { file
@@ -269,7 +150,13 @@ let rebuild t =
       | List (Atom { value = "rule"; _ } :: fields, true) ->
         Option.iter
           (single (field "alias" fields))
-          ~f:(add t.aliases file directory false)
+          ~f:(add t.aliases file directory false);
+        List.iter (Dune_rule.targets ~directory fields) ~f:(fun (target : Dune_rule.t) ->
+          let source = canonical (absolute target.directory target.atom.value) in
+          H.replace
+            t.rules
+            source
+            (target :: Option.value (H.find_opt t.rules source) ~default:[]))
       | List (Atom { value = "subdir"; _ } :: Atom path :: rest, true)
         when static path.value -> stanzas file (absolute directory path.value) rest
       | _ -> ())
@@ -349,90 +236,91 @@ let refresh t ~roots =
 ;;
 
 type reference =
-  | Library of atom * string
+  | Library of atom * string * bool
   | Alias of atom * string * bool
   | Module of atom * string * bool
   | File of atom * string
 
-let reference ~file sexps offset =
-  let selected atom = atom.first <= offset && offset < atom.last in
+let reference_atom = function
+  | Library (atom, _, _) | Alias (atom, _, _) | Module (atom, _, _) | File (atom, _) ->
+    atom
+;;
+
+let references ~file sexps =
   let rec atoms directory nodes f =
-    List.find_map nodes ~f:(function
-      | Atom atom when selected atom && static atom.value -> f atom
-      | List (Atom { value = ":include"; _ } :: [ Atom atom ], _) ->
-        if selected atom then Some (File (atom, directory)) else None
+    List.concat_map nodes ~f:(function
+      | Atom atom when static atom.value -> [ f atom ]
+      | List ([ Atom { value = ":include"; _ }; Atom atom ], _) ->
+        [ File (atom, directory) ]
       | List (nodes, _) -> atoms directory nodes f
-      | _ -> None)
+      | _ -> [])
   in
   let rec stanzas directory sexps =
-    List.find_map sexps ~f:(function
-      | List (Atom { value = "include"; _ } :: [ Atom atom ], _) when selected atom ->
-        Some (File (atom, directory))
+    List.concat_map sexps ~f:(function
+      | List ([ Atom { value = "include"; _ }; Atom atom ], _) ->
+        [ File (atom, directory) ]
       | List (Atom { value = "subdir"; _ } :: Atom path :: rest, _) when static path.value
         -> stanzas (absolute directory path.value) rest
+      | List (Atom { value = "rule"; _ } :: fields, _) ->
+        List.map (Dune_rule.references ~directory fields) ~f:(fun (atom, directory) ->
+          File (atom, directory))
+        @ fields_reference directory "rule" fields
       | List (Atom stanza :: fields, _) -> fields_reference directory stanza.value fields
-      | _ -> None)
+      | _ -> [])
   and fields_reference directory stanza fields =
-    List.find_map fields ~f:(function
+    List.concat_map fields ~f:(function
       | List (Atom key :: values, _) ->
         (match key.value with
          | "libraries" | "implements" ->
-           List.find_map values ~f:(function
-             | Atom atom when selected atom && static atom.value ->
-               Some (Library (atom, directory))
+           List.filter_map values ~f:(function
+             | Atom atom when static atom.value -> Some (Library (atom, directory, false))
              | List ([ Atom { value = "re_export"; _ }; Atom atom ], _)
-               when selected atom && static atom.value -> Some (Library (atom, directory))
+               when static atom.value -> Some (Library (atom, directory, false))
              | _ -> None)
          | "modules"
          | "modules_without_implementation"
          | "private_modules"
          | "virtual_modules" ->
-           atoms directory values (fun atom -> Some (Module (atom, directory, true)))
+           atoms directory values (fun atom -> Module (atom, directory, true))
          | ("name" | "names")
            when List.mem
                   [ "executable"; "executables"; "test"; "tests" ]
                   stanza
                   ~equal:String.equal ->
-           atoms directory values (fun atom -> Some (Module (atom, directory, false)))
+           atoms directory values (fun atom -> Module (atom, directory, false))
          | "deps" | "preprocessor_deps" -> dependencies directory values
          | "preprocess" | "lint" -> preprocess directory values
-         | _ -> None)
-      | _ -> None)
+         | _ -> [])
+      | _ -> [])
   and dependencies directory nodes =
-    List.find_map nodes ~f:(function
-      | Atom atom when selected atom -> Some (File (atom, directory))
-      | List ([ Atom { value = "file"; _ }; Atom atom ], _) when selected atom ->
-        Some (File (atom, directory))
-      | List ([ Atom { value = ("alias" | "alias_rec") as kind; _ }; Atom atom ], _)
-        when selected atom ->
-        Some (Alias (atom, directory, String.equal kind "alias_rec"))
+    List.concat_map nodes ~f:(function
+      | Atom atom -> [ File (atom, directory) ]
+      | List ([ Atom { value = "file"; _ }; Atom atom ], _) -> [ File (atom, directory) ]
+      | List ([ Atom { value = ("alias" | "alias_rec") as kind; _ }; Atom atom ], _) ->
+        [ Alias (atom, directory, String.equal kind "alias_rec") ]
       | List (Atom key :: values, _) when String.is_prefix key.value ~prefix:":" ->
         dependencies directory values
-      | _ -> None)
+      | _ -> [])
   and preprocess directory nodes =
-    List.find_map nodes ~f:(function
+    List.concat_map nodes ~f:(function
       | List (Atom { value = "per_module"; _ } :: cases, _) ->
-        List.find_map cases ~f:(function
+        List.concat_map cases ~f:(function
           | List (spec :: modules, _) ->
-            (match preprocess directory [ spec ] with
-             | Some _ as result -> result
-             | None ->
-               atoms directory modules (fun atom -> Some (Module (atom, directory, true))))
-          | _ -> None)
+            preprocess directory [ spec ]
+            @ atoms directory modules (fun atom -> Module (atom, directory, true))
+          | _ -> [])
       | List (Atom { value = "pps" | "staged_pps"; _ } :: values, _) ->
         let rec pps = function
-          | Atom { value = "--"; _ } :: _ -> None
+          | Atom { value = "--"; _ } :: _ -> []
           | Atom atom :: rest ->
-            if
-              selected atom
-              && static atom.value
-              && not (String.is_prefix atom.value ~prefix:"-")
-            then Some (Library (atom, directory))
-            else pps rest
-          | _ -> None
+            let rest = pps rest in
+            if static atom.value && not (String.is_prefix atom.value ~prefix:"-")
+            then Library (atom, directory, true) :: rest
+            else rest
+          | _ -> []
         in
         pps values
-      | _ -> None)
+      | _ -> [])
   in
   stanzas (Filename.dirname file) sexps
 ;;
@@ -442,7 +330,27 @@ let valid_file value =
   && not (List.exists [ '*'; '?'; '['; '\n'; '\r' ] ~f:(Stdlib.String.contains value))
 ;;
 
-let run t ~roots ~documents ~open_files ~file ~offset ~encoding =
+type snapshot =
+  { roots : string list
+  ; documents : (string * string) list
+  ; open_files : string list
+  ; file : string
+  ; encoding : [ `UTF8 | `UTF16 ]
+  }
+
+type dependency =
+  { name : string
+  ; range : Range.t
+  ; ppx : bool
+  ; targets : Location.t list
+  }
+
+type result =
+  { targets : Location.t list
+  ; dependency : dependency option
+  }
+
+let analyze t { roots; documents; open_files; file; encoding } ~offset =
   let dirty = t.dirty in
   t.dirty <- [];
   Document.Single_pipeline.run t.worker (fun () ->
@@ -478,79 +386,132 @@ let run t ~roots ~documents ~open_files ~file ~offset ~encoding =
              ~range:(Range.create ~start:Position.start ~end_:Position.start))
       else None
     in
+    let text file =
+      match H.find_opt t.documents (canonical file) with
+      | Some document -> Some document.text
+      | None -> read file
+    in
+    let resolve_file source =
+      let rec rules directory =
+        let found =
+          Option.value (H.find_opt t.rules directory) ~default:[]
+          |> List.filter ~f:(fun (target : Dune_rule.t) ->
+            String.equal directory source || target.tree)
+        in
+        if found <> []
+        then found
+        else (
+          let parent = Filename.dirname directory in
+          if String.equal parent directory then [] else rules parent)
+      in
+      match rules source with
+      | [] -> Option.to_list (point source)
+      | targets ->
+        List.concat_map targets ~f:(fun target ->
+          Dune_rule.resolve target ~source ~text ~point)
+        |> List.sort_uniq ~compare:Poly.compare
+    in
+    let resolve = function
+      | File (atom, directory) ->
+        if valid_file atom.value
+        then resolve_file (canonical (absolute directory atom.value))
+        else []
+      | Module (atom, directory, interface) ->
+        let name = atom.value in
+        if
+          (not (static name))
+          || List.exists [ ':'; '\\'; '/'; '.' ] ~f:(Stdlib.String.contains name)
+        then []
+        else (
+          let stems =
+            List.sort_uniq
+              [ Stdlib.String.uncapitalize_ascii name; name ]
+              ~compare:Poly.compare
+          in
+          let extensions = if interface then [ ".mli"; ".ml" ] else [ ".ml" ] in
+          let target =
+            List.find_map extensions ~f:(fun extension ->
+              List.find_map stems ~f:(fun stem ->
+                match
+                  resolve_file (canonical (Filename.concat directory (stem ^ extension)))
+                with
+                | [] -> None
+                | targets -> Some targets))
+          in
+          Option.value target ~default:[])
+      | (Library (atom, directory, _) | Alias (atom, directory, _)) as reference ->
+        let table, visible =
+          match reference with
+          | Library _ ->
+            ( t.libraries
+            , fun declaration ->
+                declaration.public
+                || String.equal declaration.project (project t directory) )
+          | Alias (_, _, recursive) ->
+            let path = canonical (absolute directory atom.value) in
+            let directory = Filename.dirname path in
+            ( t.aliases
+            , fun declaration ->
+                if recursive
+                then under directory declaration.directory
+                else String.equal directory declaration.directory )
+          | _ -> assert false
+        in
+        let name =
+          match reference with
+          | Alias _ -> Filename.basename atom.value
+          | _ -> atom.value
+        in
+        let candidates () =
+          Option.value (H.find_opt table name) ~default:[] |> List.filter ~f:visible
+        in
+        (* Validate the selected files by content, even without a watcher and
+            even when timestamps/lengths did not change. *)
+        let changed =
+          List.fold_left
+            (candidates ())
+            ~init:false
+            ~f:(fun changed (declaration : declaration) ->
+              if List.mem overlays declaration.file ~equal:String.equal
+              then changed
+              else put t declaration.file (read declaration.file) || changed)
+        in
+        if changed then rebuild t;
+        List.filter_map (candidates ()) ~f:(fun (declaration : declaration) ->
+          Option.map (H.find_opt t.documents declaration.file) ~f:(fun document ->
+            let start =
+              Reference_index.position document.text declaration.atom.first ~encoding
+            in
+            let end_ =
+              Reference_index.position document.text declaration.atom.last ~encoding
+            in
+            Location.create
+              ~uri:(Uri.of_path declaration.file)
+              ~range:(Range.create ~start ~end_)))
+        |> List.sort_uniq ~compare:Poly.compare
+    in
     match H.find_opt t.documents file with
     | None -> []
     | Some document ->
-      (match reference ~file document.sexps offset with
-       | None -> []
-       | Some (File (atom, directory)) ->
-         if valid_file atom.value
-         then Option.to_list (point (canonical (absolute directory atom.value)))
-         else []
-       | Some (Module (atom, directory, interface)) ->
-         let name = atom.value in
-         if
-           (not (static name))
-           || List.exists [ ':'; '\\'; '/'; '.' ] ~f:(Stdlib.String.contains name)
-         then []
-         else (
-           let stems =
-             List.sort_uniq
-               [ Stdlib.String.uncapitalize_ascii name; name ]
-               ~compare:Poly.compare
-           in
-           let extensions = if interface then [ ".mli"; ".ml" ] else [ ".ml" ] in
-           let target =
-             List.find_map extensions ~f:(fun extension ->
-               List.find_map stems ~f:(fun stem ->
-                 point (canonical (Filename.concat directory (stem ^ extension)))))
-           in
-           Option.to_list target)
-       | Some ((Library (atom, directory) | Alias (atom, directory, _)) as reference) ->
-         let table, visible =
-           match reference with
-           | Library _ ->
-             ( t.libraries
-             , fun declaration ->
-                 declaration.public
-                 || String.equal declaration.project (project t directory) )
-           | Alias (_, _, recursive) ->
-             let path = canonical (absolute directory atom.value) in
-             let directory = Filename.dirname path in
-             ( t.aliases
-             , fun declaration ->
-                 if recursive
-                 then under directory declaration.directory
-                 else String.equal directory declaration.directory )
-           | _ -> assert false
-         in
-         let name =
-           match reference with
-           | Alias _ -> Filename.basename atom.value
-           | _ -> atom.value
-         in
-         let candidates () =
-           Option.value (H.find_opt table name) ~default:[] |> List.filter ~f:visible
-         in
-         (* Validate the selected files by content, even without a watcher and
-            even when timestamps/lengths did not change. *)
-         let changed =
-           List.fold_left (candidates ()) ~init:false ~f:(fun changed declaration ->
-             if List.mem overlays declaration.file ~equal:String.equal
-             then changed
-             else put t declaration.file (read declaration.file) || changed)
-         in
-         if changed then rebuild t;
-         List.filter_map (candidates ()) ~f:(fun declaration ->
-           Option.map (H.find_opt t.documents declaration.file) ~f:(fun document ->
-             let start =
-               Reference_index.position document.text declaration.atom.first ~encoding
-             in
-             let end_ =
-               Reference_index.position document.text declaration.atom.last ~encoding
-             in
-             Location.create
-               ~uri:(Uri.of_path declaration.file)
-               ~range:(Range.create ~start ~end_)))
-         |> List.sort_uniq ~compare:Poly.compare))
+      references ~file document.sexps
+      |> List.filter ~f:(fun reference ->
+        match offset with
+        | Some offset ->
+          let atom = reference_atom reference in
+          atom.first <= offset && offset < atom.last
+        | None ->
+          (match reference with
+           | Library _ -> true
+           | _ -> false))
+      |> List.map ~f:(fun reference ->
+        let targets = resolve reference in
+        let dependency =
+          match reference with
+          | Library (atom, _, ppx) ->
+            let start = Reference_index.position document.text atom.first ~encoding in
+            let end_ = Reference_index.position document.text atom.last ~encoding in
+            Some { name = atom.value; range = Range.create ~start ~end_; ppx; targets }
+          | _ -> None
+        in
+        { targets; dependency }))
 ;;

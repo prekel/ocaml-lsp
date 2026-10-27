@@ -11,7 +11,7 @@ const requireE2e = createRequire(
 const rpc = requireE2e("vscode-jsonrpc/node");
 const root = path.resolve(__dirname, "../..");
 const binary = path.resolve(process.argv[2]);
-const samples = 5;
+const samples = Number(process.env.OCAMLLSP_BENCH_SAMPLES || 5);
 
 function summary(values) {
   const sorted = [...values].sort((a, b) => a - b);
@@ -23,10 +23,24 @@ function summary(values) {
 
 async function measure(source, needle) {
   const file = path.resolve(root, source);
+  const dune = path.basename(file) === "dune";
   const text = fs.readFileSync(file, "utf8");
-  const offset = text.indexOf(needle);
+  const match = dune
+    ? new RegExp(
+        "(^|[^A-Za-z0-9_.+-])(" +
+          needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") +
+          ")(?![A-Za-z0-9_.+-])",
+      ).exec(text)
+    : null;
+  const offset = dune
+    ? match
+      ? match.index + match[1].length
+      : -1
+    : text.indexOf(needle);
   if (offset < 0) throw Error(`Missing needle ${needle} in ${file}`);
-  const prefix = text.slice(0, offset + needle.indexOf(".") + 1).split("\n");
+  const prefix = text
+    .slice(0, dune ? offset : offset + needle.indexOf(".") + 1)
+    .split("\n");
   const params = {
     textDocument: { uri: pathToFileURL(file).href },
     position: { line: prefix.length - 1, character: prefix.at(-1).length },
@@ -87,7 +101,7 @@ async function measure(source, needle) {
     connection.sendNotification("textDocument/didOpen", {
       textDocument: {
         uri: params.textDocument.uri,
-        languageId: path.basename(file) === "dune" ? "dune" : "ocaml",
+        languageId: dune ? "dune" : "ocaml",
         version: 0,
         text,
       },

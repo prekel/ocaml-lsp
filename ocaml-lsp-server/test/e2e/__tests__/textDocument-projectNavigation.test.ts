@@ -118,6 +118,74 @@ describe("project definition and declaration navigation", () => {
       target("lib.mli", "long_name"),
     ]);
   });
+  it.each(["standard", "promote", "into"])(
+    "navigates from OCaml to rule-generated values and types (mode=%s)",
+    async (promote) => {
+      const implementation =
+        "type t = { number : int }\nlet make number = { number }\n";
+      const intf = "type t = { number : int }\nval make : int -> t\n";
+      const mode =
+        promote === "into"
+          ? "(mode (promote (into kept)))"
+          : promote === "promote"
+            ? "(mode promote)"
+            : "";
+      await setup({
+        dune: `(library (name navigation) (wrapped false))
+(rule ${mode} (target generated.ml) (action (with-stdout-to %{target} (echo ${JSON.stringify(implementation)}))))
+(rule ${mode} (target generated.mli) (action (with-stdout-to %{target} (echo ${JSON.stringify(intf)}))))\n`,
+        "main.ml": "let generated_value : Generated.t = Generated.make 1\n",
+      });
+      const targetName =
+        promote === "into"
+          ? "kept/generated.mli"
+          : promote === "promote"
+            ? "generated.mli"
+            : "_build/default/generated.mli";
+      texts[targetName] = fs.readFileSync(
+        path.join(directory, targetName),
+        "utf8",
+      );
+      expect(
+        await query("definition", "main.ml", "Generated.make", 10),
+      ).toEqual([target(targetName, "make")]);
+      expect(await query("definition", "main.ml", "Generated.t", 10)).toEqual([
+        target(targetName, "t =", 0, 1),
+      ]);
+      expect(
+        await query("typeDefinition", "main.ml", "generated_value"),
+      ).toEqual([target(targetName, "t =", 0, 1)]);
+    },
+  );
+  it("navigates to generated implementation-only functions without a promoted copy", async () => {
+    await setup({
+      dune: `(library (name navigation) (wrapped false))
+(rule (target generated.ml) (action (with-stdout-to %{target} (echo "let make x = x + 1"))))\n`,
+      "main.ml": "let generated_value = Generated.make 1\n",
+    });
+    texts["_build/default/generated.ml"] = fs.readFileSync(
+      path.join(directory, "_build/default/generated.ml"),
+      "utf8",
+    );
+    expect(await query("definition", "main.ml", "Generated.make", 10)).toEqual([
+      target("_build/default/generated.ml", "make"),
+    ]);
+  });
+  it("prefers a rule-generated interface over a handwritten implementation", async () => {
+    await setup({
+      dune: `(library (name navigation) (wrapped false))
+(rule (target generated.mli) (action (with-stdout-to %{target} (echo "val make : int -> int"))))\n`,
+      "generated.ml": "let make x = x + 1\n",
+      "main.ml": "let generated_value = Generated.make 1\n",
+    });
+    texts["_build/default/generated.mli"] = fs.readFileSync(
+      path.join(directory, "_build/default/generated.mli"),
+      "utf8",
+    );
+    expect(await query("definition", "main.ml", "Generated.make", 10)).toEqual([
+      target("_build/default/generated.mli", "make"),
+    ]);
+  });
   it("navigates from an interface declaration to its body", async () => {
     await setup();
     expect(await query("definition", "lib.mli", "long_name")).toEqual([

@@ -72,20 +72,22 @@ let locate_type pipeline position =
   match target with
   | None -> `Invalid_context
   | Some (env, path) ->
-    (match
-       Merlin_analysis.Locate.from_path
-         ~config:(Mpipeline.final_config pipeline)
-         ~env
-         ~namespace:`Type
-         `MLI
-         path
-     with
+    let locate config =
+      Merlin_analysis.Locate.from_path ~config ~env ~namespace:`Type `MLI path
+    in
+    let config = Mpipeline.final_config pipeline in
+    let result =
+      match locate config with
+      | `File_not_found _ -> locate (Navigation_config.with_generated_sources config)
+      | result -> result
+    in
+    (match result with
      | `Found (_, file, position) -> `Found (file, position)
      | `Builtin -> `Builtin (Path.name path)
      | (`File_not_found _ | `Not_in_env _ | `Not_found _) as result -> result)
 ;;
 
-let source_uri config path =
+let source_uri ?(missing = false) config path =
   let path = Reference_index.canonical path in
   (* Dune may return a source copy under its build context. Preserve the
      project-relative path; searching by basename could select another unit. *)
@@ -102,8 +104,23 @@ let source_uri config path =
       in
       Option.bind root ~f:(fun root ->
         let source = Filename.concat root relative in
-        try if (Unix.stat source).st_kind = S_REG then Some source else None with
-        | Unix.Unix_error _ | Sys_error _ -> None))
+        let exists path =
+          try (Unix.stat path).st_kind = S_REG with
+          | Unix.Unix_error _ | Sys_error _ -> false
+        in
+        if missing || exists source
+        then Some source
+        else (
+          let text file =
+            try
+              if (Unix.stat file).st_size <= 1_000_000
+              then Some (Io.String_path.read_file file)
+              else None
+            with
+            | Unix.Unix_error _ | Sys_error _ -> None
+          in
+          Option.bind (Dune_rule.promoted_source ~root ~source ~text) ~f:(fun source ->
+            Option.some_if (exists source) source))))
     else original parent (Filename.concat (Filename.basename directory) relative)
   in
   Uri.of_path
@@ -196,7 +213,12 @@ let type_definition state doc position =
 
 (* Preserve Locate's declaration UID so that the one selected annotation can
    validate its source digest. No project artifact discovery is needed. *)
-let native_locate pipeline ~prefix preference position =
+let native_locate ?config pipeline ~prefix preference position =
+  let config =
+    match config with
+    | Some config -> config
+    | None -> Mpipeline.final_config pipeline
+  in
   let typer = Mpipeline.typer_result pipeline in
   let local_defs = Mtyper.get_typedtree typer in
   let pos = Mpipeline.get_lexing_pos pipeline position in
@@ -214,13 +236,7 @@ let native_locate pipeline ~prefix preference position =
   then `Invalid_context, None
   else (
     match
-      Merlin_analysis.Locate.from_string
-        ~config:(Mpipeline.final_config pipeline)
-        ~env
-        ~local_defs
-        ~pos
-        preference
-        path
+      Merlin_analysis.Locate.from_string ~config ~env ~local_defs ~pos preference path
     with
     | `Found (uid, file, position) -> `Found (file, position), uid
     | `Missing_labels_namespace -> assert false
@@ -280,12 +296,47 @@ let locate kind (state : State.t) ?prefix ~doc uri position =
   | `Merlin merlin ->
     let pos = logical doc position in
     let name = if kind = `Definition then "definition" else "declaration" in
+    let open_interfaces =
+      Document_store.fold state.store ~init:[] ~f:(fun doc uris ->
+        let uri = Document.uri doc in
+        if String.is_suffix (Uri.to_path uri) ~suffix:".mli" then uri :: uris else uris)
+    in
     let* result, config, selected_name, provenance =
       Document.Merlin.with_pipeline_exn ~name merlin (fun pipeline ->
         let result, uid = native_locate pipeline ~prefix `MLI pos in
         let result, uid =
           match result with
-          | `File_not_found _ -> native_locate pipeline ~prefix `ML pos
+          | `File_not_found _ ->
+            let config =
+              Navigation_config.with_generated_sources (Mpipeline.final_config pipeline)
+            in
+            (match native_locate ~config pipeline ~prefix `MLI pos with
+             | `File_not_found _, _ -> native_locate ~config pipeline ~prefix `ML pos
+             | (`Found (Some path, _), _) as generated ->
+               (match native_locate pipeline ~prefix `ML pos with
+                | (`Found _, _) as implementation ->
+                  let original = source_uri ~missing:true config path in
+                  let source = Uri.to_path original in
+                  let root =
+                    Option.value
+                      config.merlin.source_root
+                      ~default:(Filename.dirname source)
+                  in
+                  let text file =
+                    try
+                      if (Unix.stat file).st_size <= 1_000_000
+                      then Some (Io.String_path.read_file file)
+                      else None
+                    with
+                    | Unix.Unix_error _ | Sys_error _ -> None
+                  in
+                  if
+                    List.mem open_interfaces original ~equal:Uri.equal
+                    || not (Dune_rule.generated_source ~root ~source ~text)
+                  then implementation
+                  else generated
+                | _ -> generated)
+             | result -> result)
           | result -> result, uid
         in
         let selected_name =

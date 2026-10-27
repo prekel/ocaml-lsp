@@ -1,5 +1,17 @@
 # Unreleased (OCaml 4.14)
 
+- Navigate Dune rule targets, generated module names and file dependencies to
+  existing build-context outputs, preferring promoted source copies for
+  `mode promote` (including `into`/`only`). Recognize literal inferred outputs,
+  subdirectories and named build contexts without starting a build. Recover
+  missing generated sources from configured annotation contexts for OCaml value
+  and type navigation, retaining open-interface overlays.
+- Underline resolvable Dune libraries and PPX through semantic tokens, marking
+  installed dependencies separately. Resolve external packages through the
+  server's `ocamlfind` environment, preferring installed interfaces and bodies
+  with `dune-package`/`META` fallbacks. Share targets with point navigation,
+  cache package queries, and isolate background prefetch from interactive clicks.
+  Include VS Code settings for local underlines and external italic underlines.
 - Add Dune Go to Definition/Declaration for local libraries, PPX libraries,
   module lists, executable entry points, explicit file dependencies and aliases.
   Keep a content-validated syntax index on a separate worker, honor unsaved

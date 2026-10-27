@@ -351,6 +351,22 @@ let register_dune_navigation server (state : State.t) =
     watched.dynamicRegistration
   in
   let registrations =
+    if
+      supported (fun td ->
+        Option.bind td.semanticTokens ~f:(fun tokens -> tokens.dynamicRegistration))
+    then
+      make
+        "textDocument/semanticTokens"
+        (SemanticTokensRegistrationOptions.create
+           ~documentSelector:dune
+           ~legend:Semantic_highlighting.legend
+           ~full:(`Full (SemanticTokensRegistrationOptions.create_full ~delta:true ()))
+           ()
+         |> SemanticTokensRegistrationOptions.yojson_of_t)
+      :: registrations
+    else registrations
+  in
+  let registrations =
     if watches = Some true
     then (
       let watchers =
@@ -560,68 +576,41 @@ let document_symbol (state : State.t) uri =
   Document_symbol.run client_capabilities doc uri
 ;;
 
-let dune_navigation_roots state =
-  Workspaces.workspace_folders (State.workspaces state)
-  |> List.map ~f:(fun (folder : WorkspaceFolder.t) -> Uri.to_path folder.uri)
-;;
-
 let refresh_dune_navigation (state : State.t) =
-  let roots = dune_navigation_roots state in
+  let roots = Dune_navigation_query.roots state in
   task_if_running state.detached ~f:(fun () ->
     Dune_navigation.refresh state.dune_navigation ~roots)
 ;;
 
+let semantic_refresh_supported state =
+  let open Option.O in
+  let* workspace = (State.client_capabilities state).workspace in
+  let* semantic = workspace.semanticTokens in
+  semantic.refreshSupport
+;;
+
+let refresh_dune_semantics server (state : State.t) =
+  if semantic_refresh_supported state <> Some true || !(state.dune_semantic_refresh)
+  then Fiber.return ()
+  else (
+    state.dune_semantic_refresh := true;
+    task_if_running state.detached ~f:(fun () ->
+      let* () = Lev_fiber.Timer.sleepf 0.05 in
+      state.dune_semantic_refresh := false;
+      let* running = Fiber.Pool.running state.detached in
+      if running
+      then Server.request server Server_request.SemanticTokensRefresh
+      else Fiber.return ()))
+;;
+
 let dune_definition server (state : State.t) doc position =
-  let modified () =
+  let roots = Dune_navigation_query.roots state in
+  let+ result = Dune_navigation_query.definition state doc position in
+  if roots <> Dune_navigation_query.roots (Server.state server)
+  then
     Jsonrpc.Response.Error.raise
-      (make_error
-         ~code:ContentModified
-         ~message:"A Dune document changed during navigation"
-         ())
-  in
-  let validate doc =
-    match Document_store.get_opt state.store (Document.uri doc) with
-    | Some current
-      when Document.version current = Document.version doc
-           && String.equal (Document.text current) (Document.text doc) -> ()
-    | _ -> modified ()
-  in
-  validate doc;
-  let roots = dune_navigation_roots state in
-  let documents () =
-    Document_store.fold state.store ~init:[] ~f:(fun doc acc ->
-      match Document.syntax doc with
-      | Dune -> doc :: acc
-      | _ -> acc)
-  in
-  let before = documents () in
-  let open_documents = Document_store.fold state.store ~init:[] ~f:List.cons in
-  let offset = Text_document.absolute_position (Document.text_document doc) position in
-  let+ locations =
-    Dune_navigation.run
-      state.dune_navigation
-      ~roots
-      ~documents:
-        (List.map before ~f:(fun doc -> Uri.to_path (Document.uri doc), Document.text doc))
-      ~open_files:(List.map open_documents ~f:(fun doc -> Uri.to_path (Document.uri doc)))
-      ~file:(Uri.to_path (Document.uri doc))
-      ~offset
-      ~encoding:(State.position_encoding state)
-  in
-  if
-    List.length before <> List.length (documents ())
-    || roots <> dune_navigation_roots (Server.state server)
-  then modified ();
-  List.iter before ~f:validate;
-  List.iter locations ~f:(fun (location : Location.t) ->
-    match
-      ( List.find open_documents ~f:(fun doc -> Uri.equal (Document.uri doc) location.uri)
-      , Document_store.get_opt state.store location.uri )
-    with
-    | None, None -> ()
-    | Some previous, Some _ -> validate previous
-    | _ -> modified ());
-  Some (`Location locations)
+      (make_error ~code:ContentModified ~message:"Dune workspaces changed" ());
+  result
 ;;
 
 let on_request
@@ -856,9 +845,19 @@ let on_notification server (notification : Client_notification.t) : State.t Fibe
         params
     in
     let* () = Document_store.open_document store doc in
+    let* () =
+      if Document.syntax doc = Dune
+      then refresh_dune_semantics server state
+      else Fiber.return ()
+    in
     let+ () = set_diagnostics state.detached (State.diagnostics state) doc in
     state
   | TextDocumentDidClose { textDocument = { uri } } ->
+    let dune =
+      Option.value_map (Document_store.get_opt store uri) ~default:false ~f:(fun doc ->
+        Document.syntax doc = Dune)
+    in
+    let* () = if dune then refresh_dune_semantics server state else Fiber.return () in
     let+ () =
       Diagnostics.remove (State.diagnostics state) (`Merlin uri);
       let* () = Document_store.close_document store uri in
@@ -870,6 +869,11 @@ let on_notification server (notification : Client_notification.t) : State.t Fibe
     let doc =
       Document_store.change_document store uri ~f:(fun prev_doc ->
         Document.update_text ~version prev_doc contentChanges)
+    in
+    let* () =
+      if Document.syntax doc = Dune
+      then refresh_dune_semantics server state
+      else Fiber.return ()
     in
     let+ () = set_diagnostics state.detached (State.diagnostics state) doc in
     state
@@ -906,14 +910,27 @@ let on_notification server (notification : Client_notification.t) : State.t Fibe
       State.modify_workspaces state ~f:(fun ws -> Workspaces.on_change ws change)
     in
     Dune.update_workspaces (State.dune state) (State.workspaces state);
+    let* () = refresh_dune_semantics server state in
     let+ () = refresh_dune_navigation state in
     state
   | DidChangeWatchedFiles { changes } ->
     Dune_navigation.invalidate
       state.dune_navigation
       (List.map changes ~f:(fun (event : Lsp.Types.FileEvent.t) -> Uri.to_path event.uri));
-    Fiber.return state
+    let+ () = refresh_dune_semantics server state in
+    state
   | Initialized ->
+    Dune_external.set_on_change state.dune_external (fun () ->
+      refresh_dune_semantics server state);
+    let* () =
+      if semantic_refresh_supported state = Some true
+      then
+        task_if_running state.detached ~f:(fun () ->
+          Dune_external.poll state.dune_external ~active:(fun () ->
+            Document_store.fold state.store ~init:false ~f:(fun doc found ->
+              found || Document.syntax doc = Dune)))
+      else Fiber.return ()
+    in
     let* () = register_dune_navigation server state in
     let+ () = refresh_dune_navigation state in
     state
@@ -949,6 +966,14 @@ let start stream =
   let wheel = Configuration.wheel configuration in
   let* merlin = Lev_fiber.Thread.create () in
   let* dune_navigation = Lev_fiber.Thread.create () in
+  let* external_interactive = Lev_fiber.Thread.create () in
+  let* external_background = Lev_fiber.Thread.create () in
+  let* dune_external =
+    Dune_external.create
+      ~interactive:external_interactive
+      ~background:external_background
+      ~pool:detached
+  in
   let server =
     let symbols_thread = Lazy_fiber.create Lev_fiber.Thread.create in
     Fdecl.set
@@ -960,6 +985,7 @@ let start stream =
             ~store
             ~merlin
             ~dune_navigation
+            ~dune_external
             ~ocamlformat_rpc
             ~configuration
             ~detached
@@ -1005,6 +1031,7 @@ let start stream =
       ; Lev_fiber.Timer.Wheel.run wheel
       ; with_log_errors "merlin" (fun () -> Merlin_config.DB.run state.merlin_config)
       ; (let* () = Server.start server in
+         let* () = Dune_external.stop dune_external in
          let finalize =
            [ Document_store.close_all store
            ; Fiber.Pool.stop detached
@@ -1014,6 +1041,8 @@ let start stream =
            ; Fiber.of_thunk (fun () ->
                Lev_fiber.Thread.close merlin;
                Lev_fiber.Thread.close dune_navigation;
+               Lev_fiber.Thread.close external_interactive;
+               Lev_fiber.Thread.close external_background;
                Fiber.return ())
            ]
          in

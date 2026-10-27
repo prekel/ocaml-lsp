@@ -12,14 +12,26 @@ val watch_files : t -> unit
 
 val refresh : t -> roots:string list -> unit Fiber.t
 
-(** All filesystem access and parsing runs on the dedicated worker. [documents]
-    supplies the current unsaved Dune buffers, replacing their disk contents. *)
-val run
-  :  t
-  -> roots:string list
-  -> documents:(string * string) list
-  -> open_files:string list
-  -> file:string
-  -> offset:int
-  -> encoding:[ `UTF8 | `UTF16 ]
-  -> Location.t list Fiber.t
+type snapshot =
+  { roots : string list
+  ; documents : (string * string) list
+  ; open_files : string list
+  ; file : string
+  ; encoding : [ `UTF8 | `UTF16 ]
+  }
+
+type dependency =
+  { name : string
+  ; range : Range.t
+  ; ppx : bool
+  ; targets : Location.t list
+  }
+
+type result =
+  { targets : Location.t list
+  ; dependency : dependency option
+  }
+
+(** [None] analyzes dependency references for highlighting; [Some] resolves
+    only the reference under the cursor. Work runs on the dedicated worker. *)
+val analyze : t -> snapshot -> offset:int option -> result list Fiber.t

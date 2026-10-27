@@ -115,7 +115,7 @@ let%expect_test "start/stop" =
             "tokenModifiers": [
               "declaration", "definition", "readonly", "static", "deprecated",
               "abstract", "async", "modification", "documentation",
-              "defaultLibrary"
+              "defaultLibrary", "duneLocal", "duneExternal"
             ],
             "tokenTypes": [
               "namespace", "type", "class", "enum", "interface", "struct",

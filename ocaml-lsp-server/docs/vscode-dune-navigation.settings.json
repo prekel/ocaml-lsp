@@ -1,0 +1,17 @@
+{
+  "[dune]": {
+    "editor.semanticHighlighting.enabled": true
+  },
+  "editor.semanticTokenColorCustomizations": {
+    "rules": {
+      "*.duneLocal:dune": {
+        "underline": true,
+        "italic": false
+      },
+      "*.duneExternal:dune": {
+        "underline": true,
+        "italic": true
+      }
+    }
+  }
+}

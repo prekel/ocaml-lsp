@@ -84,6 +84,8 @@ module Token_modifiers_set : sig
   val to_int : t -> int
   val singleton : SemanticTokenModifiers.t -> t
   val empty : t
+  val dune_local : t
+  val dune_external : t
   val list : string list
   val to_legend : t -> string list
 end = struct
@@ -91,6 +93,8 @@ end = struct
 
   let to_int x = x
   let empty = 0
+  let dune_local = 1 lsl 10
+  let dune_external = 1 lsl 11
 
   let singleton : SemanticTokenModifiers.t -> t = function
     | Declaration -> 1 lsl 0
@@ -116,6 +120,8 @@ end = struct
     ; "modification"
     ; "documentation"
     ; "defaultLibrary"
+    ; "duneLocal"
+    ; "duneExternal"
     ]
   ;;
 
@@ -902,6 +908,32 @@ let compute_encoded_tokens doc =
   Tokens.encode tokens
 ;;
 
+let encoded_document state doc =
+  match Document.syntax doc, Document.kind doc with
+  | Dune, _ ->
+    let+ dependencies = Dune_navigation_query.highlighting state doc in
+    let tokens = Tokens.create () in
+    List.iter dependencies ~f:(fun (dependency : Dune_navigation_query.dependency) ->
+      let range = dependency.reference.range in
+      if range.start.line = range.end_.line
+      then
+        Tokens.append_token'
+          tokens
+          range.start
+          ~length:(range.end_.character - range.start.character)
+          (if dependency.reference.ppx
+           then Token_type.of_builtin Macro
+           else Token_type.module_)
+          (match dependency.origin with
+           | Local -> Token_modifiers_set.dune_local
+           | External -> Token_modifiers_set.dune_external));
+    Some (Tokens.encode tokens)
+  | _, `Other -> Fiber.return None
+  | _, `Merlin doc ->
+    let+ tokens = compute_encoded_tokens doc in
+    Some tokens
+;;
+
 (** Contains implementation of a custom request that provides human-readable
     tokens representation *)
 module Debug = struct
@@ -942,10 +974,10 @@ let on_request_full : State.t -> SemanticTokensParams.t -> SemanticTokens.t opti
     let store = state.store in
     let uri = params.textDocument.uri in
     let doc = Document_store.get store uri in
-    match Document.kind doc with
-    | `Other -> Fiber.return None
-    | `Merlin doc ->
-      let+ tokens = compute_encoded_tokens doc in
+    let+ tokens = encoded_document state doc in
+    match tokens with
+    | None -> None
+    | Some tokens ->
       let resultId = gen_new_id () in
       Document_store.update_semantic_tokens_cache store uri ~resultId ~tokens;
       Some { SemanticTokens.resultId = Some resultId; data = tokens })
@@ -1008,10 +1040,10 @@ let on_request_full_delta
     let store = state.store in
     let uri = params.textDocument.uri in
     let doc = Document_store.get store uri in
-    match Document.kind doc with
-    | `Other -> Fiber.return None
-    | `Merlin doc ->
-      let+ tokens = compute_encoded_tokens doc in
+    let+ tokens = encoded_document state doc in
+    match tokens with
+    | None -> None
+    | Some tokens ->
       let resultId = gen_new_id () in
       let cached_token_info =
         Document_store.get_semantic_tokens_cache state.store params.textDocument.uri

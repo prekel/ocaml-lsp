@@ -50,11 +50,12 @@ running Dune or Merlin:
 
 | Dune reference | Target |
 | --- | --- |
-| `libraries`, `re_export`, `implements` | The matching local `name` or `public_name` declaration. |
-| `pps`, `staged_pps`, including `per_module` | The local PPX library declaration; arguments after `--` are ignored. |
+| `libraries`, `re_export`, `implements` | The matching local declaration, or an installed package target. |
+| `pps`, `staged_pps`, including `per_module` | The local or installed PPX library; arguments after `--` are ignored. |
 | `modules`, `private_modules`, `virtual_modules`, `modules_without_implementation`, `per_module` module names | The module's `.mli`, falling back to `.ml`. |
 | `name`/`names` in executable and test stanzas | The entry point's `.ml`. |
 | Literal `include`, ordered-set `:include`, `deps`, `preprocessor_deps`, `(file ...)`, named dependencies | The existing file, including unsaved open files. |
+| Rule `target`/`targets`, literal inferred output filenames, generated module/file references | The existing artifact in its build context, or its promoted source copy. |
 | `(alias path/name)`, `(alias_rec path/name)` dependencies | Matching alias and rule declarations in that directory, or its descendants for `alias_rec`. |
 
 Private library names are scoped to the nearest `dune-project`; public names
@@ -75,14 +76,14 @@ and `_opam`), `node_modules` and directory symlinks. Parsing is limited to 1 MB,
 
 This is source configuration navigation, not an evaluation of the Dune build
 graph. Variables, globs, generated files that do not exist, installed dependency
-libraries, `select` forms and modules inherited through `include_subdirs` are
+libraries without available metadata, `select` forms and modules inherited through `include_subdirs` are
 not resolved. Literal include paths can be opened, but declarations inside
 included fragments are not indexed. Conditions and directory-selection stanzas
 are not evaluated. Comments and action strings never become declarations.
 
 For VS Code / OCaml Platform, the server dynamically registers Definition,
-Declaration and incremental document synchronization after `initialized`, when
-the client advertises support. For Zed, the existing OCaml extension needs a
+Declaration, semantic tokens and incremental document synchronization after
+`initialized`, when the client advertises support. For Zed, the existing OCaml extension needs a
 language association in project or user settings, without changing the extension:
 
 ```json
@@ -98,6 +99,81 @@ language association in project or user settings, without changing the extension
 This repository includes that setting in `.zed/settings.json`. Restart the
 language server after installing the new binary.
 
+### Rule-generated files
+
+For a rule output, Definition and Declaration open the corresponding existing
+file under `_build/<context>/<project-relative-path>`. The source path is preserved,
+so equal basenames in different directories stay distinct. The default context
+is preferred; a context selected with `(merlin)` in `dune-workspace` takes priority.
+When only other contexts contain the output, their existing targets are returned.
+`DUNE_BUILD_DIR` is honored when set in the server environment.
+
+With `(mode promote)`, the promoted file in the source tree is preferred. This
+also handles `(until-clean)`, `(into dir)` and `only` filters expressed as literal
+globs or `and`/`or`/`not` predicates. Until a promoted copy exists, an existing build
+copy can still be opened. Fallback rules prefer existing source copies as well.
+Unsaved rule mode changes are reflected immediately in Dune-file navigation.
+
+Targets can be declared with `target`/`targets` or inferred from literal
+`with-stdout-to`, `with-stderr-to`, `with-outputs-to`, `write-file`, `copy` and
+`copy#` actions, including standard action wrappers and shorthand rules. File
+references inside a directory target resolve to existing files within its tree.
+Shell commands and variables are not evaluated. Missing outputs produce no
+location; navigation does not build or promote anything.
+
+OCaml Definition, Declaration and Type Definition can also reach generated
+`.ml`/`.mli` files without a promoted source copy. If native Merlin lookup cannot
+find a source, it retries using the source directories corresponding to the
+already configured annotation build contexts, without another typing pipeline
+or project artifact scan. Available original/promoted copies are preferred,
+including promotion into another directory; otherwise the build source is opened.
+Open source interfaces keep their existing overlay behavior.
+
+### Installed packages and PPX
+
+Visible local library declarations take precedence over installed packages.
+Other names are resolved by `ocamlfind query` from the environment used to start
+the server, including its `PATH`, `OCAMLPATH` and switch configuration. No other
+switches are searched and no build or PPX executable is started. Without
+`ocamlfind`, local navigation remains available.
+
+For an installed package, the server reads the matching library entry in
+`dune-package` and selects an existing interface or implementation for its main
+module, preferring `.mli`. It uses declared source paths and conventional main
+module filenames. If there is no usable main source, it selects the library
+name in `dune-package`, or opens `META` when Dune metadata is unavailable.
+Subpackages are resolved by their complete findlib names.
+
+Package queries are shared between clicks and highlighting. They run on separate
+interactive and background workers, so a click does not wait for unrelated
+prefetch work. Each query has a two-second deadline and a 64 KiB output limit;
+queries and their process groups are reaped on timeout and server shutdown.
+Positive package locations are cached, metadata is reconsidered after two seconds,
+and changed `META` contents trigger another findlib query. Missing names are
+cached for two seconds. Every external click rechecks its source/fallback targets.
+
+### Persistent underlines in VS Code
+
+The server emits `namespace` tokens for resolvable library references and `macro`
+tokens for resolvable PPX references. The additional `duneLocal` and `duneExternal`
+modifiers distinguish workspace declarations from installed packages. Unresolved
+names receive no added token. Dune tokens use the syntax index, without a Merlin
+pipeline, and support both full responses and deltas.
+
+Merge [the example settings](vscode-dune-navigation.settings.json) into VS Code's
+user or workspace settings. They enable Dune semantic highlighting, underline
+local references, and underline installed references in italics. Text colors
+remain controlled by the theme. The local workspace settings have been configured
+the same way; `.vscode` remains git-ignored. No OCaml Platform extension changes
+are required.
+
+External names are resolved in the background after the first highlighting
+request. Clients supporting `workspace/semanticTokens/refresh` receive a coalesced
+refresh when targets change. While a Dune buffer remains open, cached external
+entries are periodically revalidated, so package changes can update highlighting
+without a source edit. Restart the language server after installing this build
+and reload the VS Code window if the new styling does not appear.
+
 The point-navigation benchmark below also accepts a Dune source file:
 
 ```sh
@@ -105,13 +181,28 @@ node ocaml-lsp-server/bench/navigation.cjs /path/to/ocamllsp \
   ocaml-lsp-server/src/dune jsonrpc
 node ocaml-lsp-server/bench/navigation.cjs /path/to/ocamllsp \
   ocaml-lsp-server/bin/dune ocaml_lsp_server
+node ocaml-lsp-server/bench/navigation.cjs /path/to/ocamllsp \
+  lsp/bin/metamodel/dune metamodel_lsp.ml
+OCAMLLSP_BENCH_SAMPLES=20 node ocaml-lsp-server/bench/navigation.cjs /path/to/ocamllsp \
+  ocaml-lsp-server/src/dune yojson
 ```
 
-Local measurements of the installed binary on 2026-10-27: these real-source
-library jumps took 5.48 ms and 5.16 ms cold, with warm medians of 0.81 ms and
-0.73 ms (five samples each). After unsaved source edits the medians were
-1.18 ms and 1.08 ms. Traces contained
-no Merlin pipelines. These are server/IPC timings, excluding editor UI and SSH.
+Local sequential measurements on 2026-10-27, twenty samples per phase:
+
+| Dune jump | First request (ms) | Warm median / p95 (ms) |
+| --- | ---: | ---: |
+| `src/dune`: local `jsonrpc` | 6.41 | 0.81 / 1.06 |
+| `bin/dune`: local `ocaml_lsp_server` | 5.99 | 0.73 / 1.27 |
+| `src/dune`: installed `yojson` interface | 35.54 | 0.89 / 1.06 |
+| `lsp/bin/metamodel/dune`: generated `metamodel_lsp.ml` | 7.51 | 0.86 / 1.38 |
+| `submodules/lev/dune`: promoted `README.md` | 5.17 | 0.69 / 0.86 |
+
+Before these extensions, the two local-library warm medians were 0.71 ms and
+0.70 ms. The existing OCaml benchmark's warm medians were 9.35 / 7.28 ms before
+and 8.02 / 7.40 ms after; no new project snapshots or target typing pipelines
+appeared. Dune traces contained no Merlin pipelines. These are server/IPC
+timings, excluding editor UI and SSH; cold results include setup and filesystem
+cache effects, and installed-package cold lookup includes its first findlib query.
 
 ## Call hierarchy
 
