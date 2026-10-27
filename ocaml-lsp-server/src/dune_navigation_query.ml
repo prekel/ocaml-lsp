@@ -1,15 +1,6 @@
 open Import
 open Fiber.O
 
-type origin =
-  | Local
-  | External
-
-type dependency =
-  { reference : Dune_navigation.dependency
-  ; origin : origin
-  }
-
 let roots state =
   Workspaces.workspace_folders (State.workspaces state)
   |> List.map ~f:(fun (folder : WorkspaceFolder.t) -> Uri.to_path folder.uri)
@@ -71,7 +62,7 @@ let definition state doc position =
     match results with
     | [] -> Fiber.return []
     | { Dune_navigation.targets = []; dependency = Some dependency } :: _ ->
-      Dune_external.resolve state.State.dune_external ~background:false dependency.name
+      Dune_external.resolve state.State.dune_external dependency.name
     | result :: _ -> Fiber.return result.targets
   in
   check targets;
@@ -80,20 +71,11 @@ let definition state doc position =
 
 let highlighting state doc =
   let* results, check = analyze state doc ~offset:None in
-  let pending = ref [] in
   let dependencies =
     List.filter_map results ~f:(fun (result : Dune_navigation.result) ->
       Option.bind result.dependency ~f:(fun reference ->
-        if reference.targets <> []
-        then Some { reference; origin = Local }
-        else (
-          pending := reference.name :: !pending;
-          let targets = Dune_external.peek state.State.dune_external reference.name in
-          Option.some_if
-            (targets <> [])
-            { reference = { reference with targets }; origin = External })))
+        Option.some_if (reference.targets <> []) reference))
   in
-  let* () = Dune_external.prefetch state.State.dune_external !pending in
-  check (List.concat_map dependencies ~f:(fun d -> d.reference.targets));
+  check (List.concat_map dependencies ~f:(fun d -> d.targets));
   Fiber.return dependencies
 ;;

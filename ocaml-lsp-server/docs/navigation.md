@@ -144,35 +144,34 @@ module filenames. If there is no usable main source, it selects the library
 name in `dune-package`, or opens `META` when Dune metadata is unavailable.
 Subpackages are resolved by their complete findlib names.
 
-Package queries are shared between clicks and highlighting. They run on separate
-interactive and background workers, so a click does not wait for unrelated
-prefetch work. Each query has a two-second deadline and a 64 KiB output limit;
+Package queries run only for navigation on a separate worker; semantic
+highlighting never queries installed packages. Each query has a two-second
+deadline and a 64 KiB output limit;
 queries and their process groups are reaped on timeout and server shutdown.
 Positive package locations are cached, metadata is reconsidered after two seconds,
 and changed `META` contents trigger another findlib query. Missing names are
 cached for two seconds. Every external click rechecks its source/fallback targets.
 
-### Persistent underlines in VS Code
+### Local dependency highlighting in VS Code
 
-The server emits `namespace` tokens for resolvable library references and `macro`
-tokens for resolvable PPX references. The additional `duneLocal` and `duneExternal`
-modifiers distinguish workspace declarations from installed packages. Unresolved
-names receive no added token. Dune tokens use the syntax index, without a Merlin
-pipeline, and support both full responses and deltas.
+The server emits standard `namespace` tokens for resolvable local library
+references and `macro` tokens for resolvable local PPX references. The theme
+controls their colors when semantic highlighting is enabled. Installed packages
+and unresolved names receive no added token, including after navigating to them.
+Names containing hyphens or dots are emitted as one complete token, also when
+quoted. Dune tokens use the syntax index, without a Merlin pipeline, and support
+both full responses and deltas.
 
-Merge [the example settings](vscode-dune-navigation.settings.json) into VS Code's
-user or workspace settings. They enable Dune semantic highlighting, underline
-local references, and underline installed references in italics. Text colors
-remain controlled by the theme. The local workspace settings have been configured
-the same way; `.vscode` remains git-ignored. No OCaml Platform extension changes
-are required.
+For optional persistent underlines, merge
+[the example settings](vscode-dune-navigation.settings.json) into VS Code's user
+or workspace settings. They enable Dune semantic highlighting and style the
+additional `duneLocal` modifier. Text colors remain controlled by the theme.
+The local workspace settings have been configured the same way; `.vscode`
+remains git-ignored. No OCaml Platform extension changes are required.
 
-External names are resolved in the background after the first highlighting
-request. Clients supporting `workspace/semanticTokens/refresh` receive a coalesced
-refresh when targets change. While a Dune buffer remains open, cached external
-entries are periodically revalidated, so package changes can update highlighting
-without a source edit. Restart the language server after installing this build
-and reload the VS Code window if the new styling does not appear.
+Clients supporting `workspace/semanticTokens/refresh` receive a coalesced
+refresh when local Dune declarations or workspace folders change. Restart the
+language server after installing this build.
 
 The point-navigation benchmark below also accepts a Dune source file:
 

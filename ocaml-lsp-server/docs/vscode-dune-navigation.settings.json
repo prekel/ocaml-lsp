@@ -7,10 +7,6 @@
       "*.duneLocal:dune": {
         "underline": true,
         "italic": false
-      },
-      "*.duneExternal:dune": {
-        "underline": true,
-        "italic": true
       }
     }
   }

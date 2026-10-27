@@ -85,7 +85,6 @@ module Token_modifiers_set : sig
   val singleton : SemanticTokenModifiers.t -> t
   val empty : t
   val dune_local : t
-  val dune_external : t
   val list : string list
   val to_legend : t -> string list
 end = struct
@@ -94,7 +93,6 @@ end = struct
   let to_int x = x
   let empty = 0
   let dune_local = 1 lsl 10
-  let dune_external = 1 lsl 11
 
   let singleton : SemanticTokenModifiers.t -> t = function
     | Declaration -> 1 lsl 0
@@ -121,7 +119,7 @@ end = struct
     ; "documentation"
     ; "defaultLibrary"
     ; "duneLocal"
-    ; "duneExternal"
+    ; "duneExternal" (* Reserved to preserve existing legend indices. *)
     ]
   ;;
 
@@ -913,20 +911,16 @@ let encoded_document state doc =
   | Dune, _ ->
     let+ dependencies = Dune_navigation_query.highlighting state doc in
     let tokens = Tokens.create () in
-    List.iter dependencies ~f:(fun (dependency : Dune_navigation_query.dependency) ->
-      let range = dependency.reference.range in
+    List.iter dependencies ~f:(fun (dependency : Dune_navigation.dependency) ->
+      let range = dependency.range in
       if range.start.line = range.end_.line
       then
         Tokens.append_token'
           tokens
           range.start
           ~length:(range.end_.character - range.start.character)
-          (if dependency.reference.ppx
-           then Token_type.of_builtin Macro
-           else Token_type.module_)
-          (match dependency.origin with
-           | Local -> Token_modifiers_set.dune_local
-           | External -> Token_modifiers_set.dune_external));
+          (if dependency.ppx then Token_type.of_builtin Macro else Token_type.module_)
+          Token_modifiers_set.dune_local);
     Some (Tokens.encode tokens)
   | _, `Other -> Fiber.return None
   | _, `Merlin doc ->

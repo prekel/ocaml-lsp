@@ -20,39 +20,27 @@ type entry =
 
 type cached =
   | Ready of entry
-  | Running of entry option * entry Fiber.Ivar.t
+  | Running of entry Fiber.Ivar.t
 
 type t =
   { interactive : Lev_fiber.Thread.t
-  ; background : Lev_fiber.Thread.t
   ; pool : Fiber.Pool.t
-  ; clock : Lev_fiber.Timer.Wheel.t
   ; cache : (string, cached) H.t
   ; processes : (int, unit) H.t
-  ; mutable pending : string list
-  ; mutable prefetching : bool
   ; mutable stopped : bool
-  ; mutable on_change : unit -> unit Fiber.t
   ; mutable encoding : [ `UTF8 | `UTF16 ]
   }
 
-let create ~interactive ~background ~pool =
-  let+ clock = Lev_fiber.Timer.Wheel.create ~delay:2. in
+let create ~interactive ~pool =
   { interactive
-  ; background
   ; pool
-  ; clock
   ; cache = H.create 64
   ; processes = H.create 2
-  ; pending = []
-  ; prefetching = false
   ; stopped = false
-  ; on_change = (fun () -> Fiber.return ())
   ; encoding = `UTF16
   }
 ;;
 
-let set_on_change t f = t.on_change <- f
 let set_encoding t encoding = t.encoding <- encoding
 
 let kill pid =
@@ -62,14 +50,13 @@ let kill pid =
 
 let stop t =
   t.stopped <- true;
-  let* () = Lev_fiber.Timer.Wheel.stop t.clock in
   H.iter (fun pid () -> kill pid) t.processes;
   let running =
     H.fold
       (fun _ entry running ->
          match entry with
          | Ready _ -> running
-         | Running (_, ivar) -> ivar :: running)
+         | Running ivar -> ivar :: running)
       t.cache
       []
   in
@@ -348,12 +335,12 @@ let await t result =
             ()))
 ;;
 
-let resolve t ~background name =
+let resolve t name =
   if t.stopped || not (valid_name name)
   then Fiber.return []
   else (
     match H.find_opt t.cache name with
-    | Some (Running (_, result)) ->
+    | Some (Running result) ->
       let+ result = await t result in
       result.targets
     | Some (Ready ({ package = None; _ } as entry)) when fresh entry -> Fiber.return []
@@ -364,14 +351,13 @@ let resolve t ~background name =
         | _ -> None
       in
       let result = Fiber.Ivar.create () in
-      H.replace t.cache name (Running (previous, result));
+      H.replace t.cache name (Running result);
       let binary = Bin.which "ocamlfind" in
       let* () =
         task_if_running t.pool ~f:(fun () ->
-          let worker = if background then t.background else t.interactive in
           let* entry =
             match
-              Lev_fiber.Thread.task worker ~f:(fun () ->
+              Lev_fiber.Thread.task t.interactive ~f:(fun () ->
                 try
                   if t.stopped
                   then negative ()
@@ -391,78 +377,8 @@ let resolve t ~background name =
                | Error _ -> negative ())
           in
           H.replace t.cache name (Ready entry);
-          let* () = Fiber.Ivar.fill result entry in
-          if
-            t.stopped
-            || Option.value_map previous ~default:false ~f:(fun previous ->
-              previous.targets = entry.targets)
-          then Fiber.return ()
-          else t.on_change ())
+          Fiber.Ivar.fill result entry)
       in
       let+ entry = await t result in
       entry.targets)
-;;
-
-let peek t name =
-  match H.find_opt t.cache name with
-  | Some (Ready e) -> e.targets
-  | Some (Running (Some e, _)) -> e.targets
-  | _ -> []
-;;
-
-let prefetch t names =
-  let needed name =
-    valid_name name
-    &&
-    match H.find_opt t.cache name with
-    | Some (Ready e) -> not (fresh e)
-    | Some (Running _) -> false
-    | None -> true
-  in
-  t.pending
-  <- List.filter names ~f:needed @ t.pending |> List.sort_uniq ~compare:Poly.compare;
-  if t.prefetching || t.stopped || t.pending = []
-  then Fiber.return ()
-  else (
-    t.prefetching <- true;
-    task_if_running t.pool ~f:(fun () ->
-      let rec loop () =
-        match t.pending with
-        | [] ->
-          t.prefetching <- false;
-          Fiber.return ()
-        | _ when t.stopped ->
-          t.prefetching <- false;
-          t.pending <- [];
-          Fiber.return ()
-        | name :: rest ->
-          t.pending <- rest;
-          let* (_ : Location.t list) =
-            if needed name then resolve t ~background:true name else Fiber.return []
-          in
-          let* () = Lev_fiber.yield () in
-          loop ()
-      in
-      loop ()))
-;;
-
-let poll t ~active =
-  let rec loop () =
-    if t.stopped
-    then Fiber.return ()
-    else
-      let* timer = Lev_fiber.Timer.Wheel.task t.clock in
-      let* outcome = Lev_fiber.Timer.Wheel.await timer in
-      match outcome with
-      | `Cancelled -> Fiber.return ()
-      | `Ok when t.stopped -> Fiber.return ()
-      | `Ok ->
-        let* () =
-          if active ()
-          then prefetch t (H.fold (fun name _ names -> name :: names) t.cache [])
-          else Fiber.return ()
-        in
-        loop ()
-  in
-  Fiber.fork_and_join_unit (fun () -> Lev_fiber.Timer.Wheel.run t.clock) loop
 ;;

@@ -920,17 +920,6 @@ let on_notification server (notification : Client_notification.t) : State.t Fibe
     let+ () = refresh_dune_semantics server state in
     state
   | Initialized ->
-    Dune_external.set_on_change state.dune_external (fun () ->
-      refresh_dune_semantics server state);
-    let* () =
-      if semantic_refresh_supported state = Some true
-      then
-        task_if_running state.detached ~f:(fun () ->
-          Dune_external.poll state.dune_external ~active:(fun () ->
-            Document_store.fold state.store ~init:false ~f:(fun doc found ->
-              found || Document.syntax doc = Dune)))
-      else Fiber.return ()
-    in
     let* () = register_dune_navigation server state in
     let+ () = refresh_dune_navigation state in
     state
@@ -967,12 +956,8 @@ let start stream =
   let* merlin = Lev_fiber.Thread.create () in
   let* dune_navigation = Lev_fiber.Thread.create () in
   let* external_interactive = Lev_fiber.Thread.create () in
-  let* external_background = Lev_fiber.Thread.create () in
-  let* dune_external =
-    Dune_external.create
-      ~interactive:external_interactive
-      ~background:external_background
-      ~pool:detached
+  let dune_external =
+    Dune_external.create ~interactive:external_interactive ~pool:detached
   in
   let server =
     let symbols_thread = Lazy_fiber.create Lev_fiber.Thread.create in
@@ -1042,7 +1027,6 @@ let start stream =
                Lev_fiber.Thread.close merlin;
                Lev_fiber.Thread.close dune_navigation;
                Lev_fiber.Thread.close external_interactive;
-               Lev_fiber.Thread.close external_background;
                Fiber.return ())
            ]
          in

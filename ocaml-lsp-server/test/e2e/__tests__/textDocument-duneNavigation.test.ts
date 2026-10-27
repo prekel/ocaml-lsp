@@ -287,12 +287,12 @@ esac
       registration.registerOptions.legend.tokenModifiers.slice(-2),
     ).toEqual(["duneLocal", "duneExternal"]);
   });
-  it("underlines only resolvable local libraries and PPX, without highlighting PPX flags", async () => {
+  it("highlights only resolvable local libraries and PPX, without highlighting PPX flags", async () => {
     await setup(
       {
         ...externalFiles(),
         "bin/dune":
-          "(executable (name main) (libraries local_lib missing.lib) (preprocess (pps example.api -- local_lib)))\n",
+          "(executable (name main) (libraries local_lib external.api missing.lib) (preprocess (pps example.api external.ppx -- local_lib)))\n",
       },
       semanticCapabilities,
     );
@@ -300,7 +300,35 @@ esac
       { name: "local_lib", type: "namespace", modifiers: ["duneLocal"] },
       { name: "example.api", type: "macro", modifiers: ["duneLocal"] },
     ]);
+    expect(fs.existsSync(path.join(directory, "queries.log"))).toBe(false);
   });
+  it.each([false, true])(
+    "keeps hyphenated local library and PPX names in single tokens (quoted: %s)",
+    async (quoted) => {
+      const lib = "my-package.core-utils";
+      const ppx = "my-package.ppx-tools";
+      const atom = (name: string) => (quoted ? JSON.stringify(name) : name);
+      await setup({
+        "lib/dune": `(library (name local_lib) (public_name ${lib}))\n`,
+        "ppx/dune": `(library (name local_ppx) (public_name ${ppx}) (kind ppx_rewriter))\n`,
+        "bin/dune": `(executable (name main) (libraries ${atom(lib)}) (preprocess (pps ${atom(ppx)})))\n`,
+      });
+      expect(decode("bin/dune", await semantic())).toEqual([
+        { name: lib, type: "namespace", modifiers: ["duneLocal"] },
+        { name: ppx, type: "macro", modifiers: ["duneLocal"] },
+      ]);
+      for (const [name, file] of [
+        [lib, "lib/dune"],
+        [ppx, "ppx/dune"],
+      ]) {
+        for (let offset = 0; offset < name.length; offset++) {
+          expect(await query("bin/dune", name, offset)).toEqual([
+            target(file, name),
+          ]);
+        }
+      }
+    },
+  );
   it("resolves an external subpackage to its declared interface and caches the package lookup", async () => {
     await setup({
       ...externalFiles(),
@@ -352,26 +380,34 @@ esac
     expect(await query("bin/dune", "meta.only")).toEqual([
       target("installed/legacy/META"),
     ]);
-    expect(decode("bin/dune", await semantic())).toEqual([
-      { name: "meta.only", type: "namespace", modifiers: ["duneExternal"] },
-      { name: "external.ppx", type: "macro", modifiers: ["duneExternal"] },
-    ]);
+    expect(decode("bin/dune", await semantic())).toEqual([]);
   });
-  it("refreshes external highlighting after background resolution and shares the query with a click", async () => {
+  it("keeps installed dependencies unhighlighted after navigation resolves them", async () => {
     await setup(
       {
         ...externalFiles(),
-        "bin/dune": "(executable (name main) (libraries external.api))\n",
+        "bin/dune":
+          "(executable (name main) (libraries local_lib external.api))\n",
       },
       semanticCapabilities,
     );
-    await semantic();
+    const before = await semantic();
+    expect(decode("bin/dune", before)).toEqual([
+      { name: "local_lib", type: "namespace", modifiers: ["duneLocal"] },
+    ]);
     expect(await query("bin/dune", "external.api")).toEqual([
       target("installed/pkg/sub/api.mli"),
     ]);
-    await until(() => refreshes > 0);
+    const delta = await server!.sendRequest<Protocol.SemanticTokensDelta>(
+      "textDocument/semanticTokens/full/delta",
+      {
+        textDocument: { uri: uri("bin/dune") },
+        previousResultId: before.resultId,
+      },
+    );
+    expect(delta.edits).toEqual([]);
     expect(decode("bin/dune", await semantic())).toEqual([
-      { name: "external.api", type: "namespace", modifiers: ["duneExternal"] },
+      { name: "local_lib", type: "namespace", modifiers: ["duneLocal"] },
     ]);
     expect(
       fs
@@ -449,7 +485,7 @@ esac
     expect(await query("bin/dune", "slow.pkg")).toEqual([]);
     expect(Date.now() - start).toBeLessThan(3500);
   });
-  it("terminates and reaps background package queries on server shutdown", async () => {
+  it("terminates and reaps pending package queries on server shutdown", async () => {
     await setup(
       {
         ...externalFiles(),
@@ -457,11 +493,27 @@ esac
       },
       semanticCapabilities,
     );
-    await semantic();
-    await until(() => fs.existsSync(path.join(directory, "query.pid")));
-    const pid = Number(
-      fs.readFileSync(path.join(directory, "query.pid"), "utf8"),
+    open("bin/dune");
+    const cancellation = new CancellationTokenSource();
+    const pending = server!.sendRequest(
+      "textDocument/definition",
+      {
+        textDocument: { uri: uri("bin/dune") },
+        position: position("bin/dune", "slow.pkg"),
+      },
+      cancellation.token,
     );
+    const rejected = expect(pending).rejects.toMatchObject({ code: -32800 });
+    let pid = 0;
+    await until(() => {
+      const file = path.join(directory, "query.pid");
+      if (!fs.existsSync(file)) return false;
+      pid = Number(fs.readFileSync(file, "utf8"));
+      return Number.isInteger(pid) && pid > 0;
+    });
+    cancellation.cancel();
+    await rejected;
+    cancellation.dispose();
     await LanguageServer.exit(server!);
     server = undefined;
     await until(() => {
@@ -473,22 +525,27 @@ esac
       }
     }, 1000);
   });
-  it("does not queue an interactive external click behind background prefetch", async () => {
+  it("does not query external names for highlighting or delay a subsequent click", async () => {
     await setup(
       {
         ...externalFiles(),
         "bin/dune":
-          "(executable (name main) (libraries aaa.slow external.api))\n",
+          "(executable (name main) (libraries aaa.slow local_lib external.api))\n",
       },
       semanticCapabilities,
     );
-    await semantic();
-    await until(() => fs.existsSync(path.join(directory, "queries.log")));
+    expect(decode("bin/dune", await semantic())).toEqual([
+      { name: "local_lib", type: "namespace", modifiers: ["duneLocal"] },
+    ]);
+    expect(fs.existsSync(path.join(directory, "queries.log"))).toBe(false);
     const start = Date.now();
     expect(await query("bin/dune", "external.api")).toEqual([
       target("installed/pkg/sub/api.mli"),
     ]);
     expect(Date.now() - start).toBeLessThan(1000);
+    expect(
+      fs.readFileSync(path.join(directory, "queries.log"), "utf8").trim(),
+    ).toEqual("external.api");
   });
   it("retries negative entries and reloads changed package metadata without requerying a positive package", async () => {
     await setup({
@@ -545,7 +602,7 @@ esac
         .split("\n"),
     ).toEqual(["external.api", "external.api"]);
   });
-  it("refreshes idle highlighting when an installed target disappears", async () => {
+  it("rechecks external targets on clicks without adding semantic tokens", async () => {
     await setup(
       {
         ...externalFiles(),
@@ -554,23 +611,23 @@ esac
       semanticCapabilities,
     );
     await query("bin/dune", "external.api");
-    await semantic();
-    await until(() => refreshes > 0);
-    const before = refreshes;
+    expect(decode("bin/dune", await semantic())).toEqual([]);
     fs.unlinkSync(path.join(directory, "installed/pkg/sub/api.mli"));
-    await until(() => refreshes > before, 6000);
     expect(await query("bin/dune", "external.api")).toEqual([
       target("installed/pkg/sub/api.ml"),
     ]);
-  }, 7000);
+    expect(decode("bin/dune", await semantic())).toEqual([]);
+  });
   it.each(["utf-8", "utf-16"])(
     "uses negotiated encoding for highlighting and external metadata (%s)",
     async (encoding) => {
       await setup(
         {
           ...externalFiles(),
+          "lib/dune":
+            "(library (name local_lib) (public_name my-package.core-utils))\n",
           "bin/dune":
-            '(executable (name main) (synopsis "😀") (libraries local_lib) (preprocess (pps external.ppx)))\n',
+            '(executable (name main) (synopsis "😀") (libraries my-package.core-utils) (preprocess (pps external.ppx)))\n',
           "installed/pkg/dune-package":
             '(library (synopsis "😀") (name external.ppx) (kind ppx_rewriter))\n',
         },
@@ -589,11 +646,14 @@ esac
       expect(await query("bin/dune", "external.ppx")).toEqual([expected]);
       change(
         "bin/dune",
-        '(executable (name main) (synopsis "😀") (libraries local_lib) (preprocess (pps external.ppx)))\n',
+        '(executable (name main) (synopsis "😀") (libraries my-package.core-utils) (preprocess (pps external.ppx)))\n',
       );
       expect(decode("bin/dune", await semantic())).toEqual([
-        { name: "local_lib", type: "namespace", modifiers: ["duneLocal"] },
-        { name: "external.ppx", type: "macro", modifiers: ["duneExternal"] },
+        {
+          name: "my-package.core-utils",
+          type: "namespace",
+          modifiers: ["duneLocal"],
+        },
       ]);
     },
   );
