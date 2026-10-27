@@ -1,14 +1,13 @@
 # Unreleased (OCaml 4.14)
 
-- Prefer `.mli` declarations for Ctrl-click and Go to Definition; on an actual
-  interface declaration, open its `.ml` body. Go to Implementation opens `.ml`
-  directly. Resolve point navigation through the compiler load path and snapshot
-  only participating buffers, avoiding unrelated build scans and edit failures.
-- Resolve project definitions and declarations through compiler identities,
-  including jumps between `.ml` bindings and `.mli` declarations. Use current
-  unsaved target buffers, select complete names in closed files, handle Unicode
-  positions, and skip outdated closed-file targets. Fix type-definition lookup
-  through explicitly annotated polymorphic patterns in Merlin 4.19.
+- Keep point navigation fast with native Merlin Locate and a bounded syntax
+  cache, preferring `.mli` declarations, selecting complete names and following
+  known interface declarations into `.ml`. Relocate ordinary unsaved targets by
+  declaration path and namespace, and validate available source digests. Avoid
+  project indexing and target type checking on clicks; retain the project index
+  for references and call hierarchy. Add a reproducible real-source benchmark.
+- Fix type-definition lookup through explicitly annotated polymorphic patterns
+  in Merlin 4.19, retaining complete type-name ranges in closed targets.
 - Backport interface-type Go to Implementation from upstream #2074, adapted
   to Merlin 4.19, including temporary document cleanup and functor results.
 - Extend Go to Implementation to values, modules and cross-file usages,

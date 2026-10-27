@@ -22,12 +22,12 @@ let roots state source =
     find (Filename.dirname source))
 ;;
 
-let documents ?(all = false) state roots =
+let documents state roots =
   Document_store.fold state.State.store ~init:[] ~f:(fun doc acc ->
     let path = Reference_index.canonical (Uri.to_path (Document.uri doc)) in
     match Document.kind doc with
     | `Merlin merlin
-      when all || List.exists roots ~f:(fun root -> Reference_index.under root path) ->
+      when List.exists roots ~f:(fun root -> Reference_index.under root path) ->
       (doc, merlin) :: acc
     | _ -> acc)
 ;;
@@ -55,15 +55,7 @@ let with_document (state : State.t) uri f =
        Fiber.finalize (fun () -> f doc) ~finally:(fun () -> Document.close doc))
 ;;
 
-let run
-      rpc
-      (state : State.t)
-      ~doc
-      ?position
-      ?(include_importers = true)
-      ?(navigation = false)
-      f
-  =
+let run rpc (state : State.t) ~doc ?position ?(include_importers = true) f =
   let source = Reference_index.canonical (Uri.to_path (Document.uri doc)) in
   let roots_before = roots state source in
   let* cancel = Server.cancel_token () in
@@ -72,12 +64,19 @@ let run
     | `Other -> assert false
     | `Merlin merlin ->
       let* config = Document.Merlin.mconfig merlin in
-      let snapshots = documents ~all:navigation state roots_before in
+      let snapshots = documents state roots_before in
       let current_was_open =
         Option.is_some (Document_store.get_opt state.store (Document.uri doc))
       in
-      let snapshot documents =
-        Fiber.sequential_map documents ~f:(fun (doc, merlin) ->
+      let watched =
+        if
+          List.exists snapshots ~f:(fun (snapshot, _) ->
+            Uri.equal (Document.uri snapshot) (Document.uri doc))
+        then snapshots
+        else (doc, merlin) :: snapshots
+      in
+      let* overlays =
+        Fiber.sequential_map watched ~f:(fun (doc, merlin) ->
           Document.Merlin.with_pipeline_exn
             ~name:"project snapshot"
             merlin
@@ -89,96 +88,46 @@ let run
                  pipeline
                  doc))
       in
-      let watched =
-        if
-          List.exists snapshots ~f:(fun (snapshot, _) ->
-            Uri.equal (Document.uri snapshot) (Document.uri doc))
-        then snapshots
-        else (doc, merlin) :: snapshots
-      in
-      (* A jump needs the source identity first, then only its target buffers.
-         References and call hierarchy retain their complete workspace snapshot. *)
-      let* initial_overlays =
-        snapshot (if navigation then [ doc, merlin ] else watched)
-      in
       let units =
         Option.map position ~f:(fun position ->
           let offset =
             Text_document.absolute_position (Document.text_document doc) position
           in
           Option.value
-            (List.find_map initial_overlays ~f:(fun file ->
+            (List.find_map overlays ~f:(fun file ->
                Reference_index.target_units file ~source offset))
             ~default:[])
       in
-      let on_worker f =
+      let* result, failures, stale =
         Document.Single_pipeline.run state.merlin (fun () ->
           let module Mocaml = Merlin_kernel.Mocaml in
-          Mocaml.with_state (Mocaml.new_state ()) f)
-      in
-      let* files, failures =
-        on_worker (fun () ->
-          let files, failures =
-            if roots_before = []
-            then [], 0
-            else
-              Reference_index.refresh
-                ?units
-                ~include_importers
-                ~navigation
+          Mocaml.with_state (Mocaml.new_state ()) (fun () ->
+            let files, failures =
+              if roots_before = []
+              then [], 0
+              else
+                Reference_index.refresh
+                  ?units
+                  ~include_importers
+                  state.reference_index
+                  ~roots:roots_before
+                  ~paths:(Mconfig.build_path config @ Mconfig.cmt_path config)
+                  ~cancel
+            in
+            let support =
+              Reference_index.supporting_files
                 state.reference_index
-                ~roots:roots_before
-                ~paths:(Mconfig.build_path config @ Mconfig.cmt_path config)
+                ~files:(overlays @ files)
+                ~units:
+                  (match units with
+                   | Some units -> units
+                   | None -> Reference_index.called_units (overlays @ files))
                 ~cancel
-          in
-          let support =
-            Reference_index.supporting_files
-              state.reference_index
-              ~files:(initial_overlays @ files)
-              ~units:
-                (match units with
-                 | Some units -> units
-                 | None -> Reference_index.called_units (initial_overlays @ files))
-              ~cancel
-          in
-          support @ files, failures)
-      in
-      let relevant_sources =
-        List.concat_map (source :: Reference_index.sources files) ~f:(fun source ->
-          (* An open counterpart can outlive its on-disk source. Include it by
-             exact path; symbol equivalence still decides whether it is a target. *)
-          let counterpart =
-            if String.is_suffix source ~suffix:".mli"
-            then String.sub source ~pos:0 ~len:(String.length source - 1)
-            else source ^ "i"
-          in
-          [ source; Reference_index.canonical counterpart ])
-      in
-      let select documents =
-        if not navigation
-        then documents
-        else
-          List.filter documents ~f:(fun (doc, _) ->
-            List.mem
-              relevant_sources
-              (Reference_index.canonical (Uri.to_path (Document.uri doc)))
-              ~equal:String.equal)
-      in
-      let snapshots = select snapshots in
-      let watched = select watched in
-      let* overlays =
-        if not navigation
-        then Fiber.return initial_overlays
-        else
-          let+ targets =
-            snapshot
-              (List.filter watched ~f:(fun (target, _) ->
-                 not (Uri.equal (Document.uri target) (Document.uri doc))))
-          in
-          initial_overlays @ targets
-      in
-      let* result, stale =
-        on_worker (fun () -> f ~roots:roots_before ~files ~overlays ~cancel)
+            in
+            let result, stale =
+              f ~roots:roots_before ~files:(support @ files) ~overlays ~cancel
+            in
+            result, failures, stale))
       in
       let changed () =
         Jsonrpc.Response.Error.raise
@@ -209,8 +158,7 @@ let run
            | Sys_error _ | Unix.Unix_error _ -> changed ())
         | _ -> changed ());
       if
-        versions snapshots
-        <> versions (select (documents ~all:navigation state roots_before))
+        versions snapshots <> versions (documents state roots_before)
         || roots_before <> roots (Server.state rpc) source
       then changed ();
       let message =

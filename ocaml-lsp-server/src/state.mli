@@ -31,6 +31,7 @@ type t =
   ; symbols_thread : Lev_fiber.Thread.t Lazy_fiber.t
   ; wheel : Lev_fiber.Timer.Wheel.t
   ; hover_extended : hover_extended
+  ; navigation_syntax : Navigation_syntax.t
   ; reference_index : Reference_index.t
   }
 

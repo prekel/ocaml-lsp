@@ -1053,53 +1053,9 @@ let load ?source_override ?loadpath_override cache roots ~shape_roots artifact c
     }
 ;;
 
-(* Follow the compiler's load path, rather than walking every build context for
-   a single jump. The first CMI owns the unit; never mix same-named libraries. *)
-let navigation_artifacts paths units =
-  let unit_artifacts unit_name =
-    let names = [ unit_name; Stdlib.String.uncapitalize_ascii unit_name ] in
-    let owner =
-      List.find_map paths ~f:(fun directory ->
-        List.find_map names ~f:(fun name ->
-          let base = Filename.concat directory name in
-          if Sys.file_exists (base ^ ".cmi") then Some base else None))
-    in
-    Option.bind owner ~f:(fun base ->
-      let annotations =
-        List.filter_map [ ".cmt"; ".cmti" ] ~f:(fun extension ->
-          let path = base ^ extension in
-          if Sys.file_exists path then Some path else None)
-      in
-      if annotations = [] then None else Some annotations)
-  in
-  let rec collect acc = function
-    | [] -> Some (List.concat (List.rev acc))
-    | unit_name :: rest ->
-      Option.bind (unit_artifacts unit_name) ~f:(fun paths -> collect (paths :: acc) rest)
-  in
-  collect [] units
-;;
-
-let refresh
-      ?units
-      ?(include_importers = true)
-      ?(navigation = false)
-      t
-      ~roots
-      ~paths
-      ~cancel
-  =
+let refresh ?units ?(include_importers = true) t ~roots ~paths ~cancel =
   let directories = build_roots roots paths in
-  let targeted =
-    if navigation && not include_importers
-    then Option.bind units ~f:(navigation_artifacts paths)
-    else None
-  in
-  let paths =
-    match targeted with
-    | Some paths -> paths
-    | None -> artifacts directories cancel
-  in
+  let paths = artifacts directories cancel in
   let present = H.create (List.length paths) in
   let wanted = H.create (List.length paths) in
   let failures = ref 0 in
@@ -1146,26 +1102,22 @@ let refresh
     | _ ->
       H.remove t.artifacts path;
       incr failures);
-  if Option.is_none targeted
-  then
-    H.filter_map_inplace
-      (fun path file -> if H.mem present path then Some file else None)
-      t.artifacts;
+  H.filter_map_inplace
+    (fun path file -> if H.mem present path then Some file else None)
+    t.artifacts;
   let files =
     H.fold
       (fun path (_, file) acc -> if H.mem wanted path then file :: acc else acc)
       t.artifacts
       []
   in
-  if Option.is_none targeted
-  then (
-    H.filter_map_inplace
-      (fun path entry -> if H.mem present path then Some entry else None)
-      t.metadata;
-    H.filter_map_inplace
-      (fun path info -> if H.mem present path then Some info else None)
-      t.shapes);
-  files, (if paths = [] && Option.is_none targeted then 1 else 0) + !failures
+  H.filter_map_inplace
+    (fun path entry -> if H.mem present path then Some entry else None)
+    t.metadata;
+  H.filter_map_inplace
+    (fun path info -> if H.mem present path then Some info else None)
+    t.shapes;
+  files, (if paths = [] then 1 else 0) + !failures
 ;;
 
 let live ?cancel ~cache ~roots pipeline doc =
@@ -1545,64 +1497,6 @@ let lookup ~cache:_ ~files ~overlays ~source ~offset ~include_declaration ~cance
             | _ -> None))))
   in
   (if !has_occurrence && Option.is_none found then Some [] else found), stale
-;;
-
-let sources files = List.map files ~f:(fun file -> file.source)
-
-let locate
-      ~files
-      ~overlays
-      ~source
-      ~offset
-      ~implementation
-      ~interface_to_implementation
-      ~cancel
-  =
-  let resolve = equivalence (overlays @ files) cancel in
-  let current = List.find overlays ~f:(fun file -> String.equal file.source source) in
-  let selected =
-    Option.bind current ~f:(fun file ->
-      List.find_map (selected_occurrences file offset) ~f:(fun o -> resolve file o.symbol))
-  in
-  let implementation =
-    implementation
-    || (interface_to_implementation
-        && String.is_suffix source ~suffix:".mli"
-        && Option.value_map current ~default:false ~f:(fun file ->
-          List.exists (selected_occurrences file offset) ~f:(fun o -> o.declaration)))
-  in
-  let valid, stale = current_files files overlays in
-  let declarations files selected =
-    List.concat_map files ~f:(fun file ->
-      check_cancel cancel;
-      List.filter_map file.occurrences ~f:(fun o ->
-        if
-          o.declaration
-          && Option.value_map
-               (resolve file o.symbol)
-               ~default:false
-               ~f:(String.equal selected)
-        then Some (file, o)
-        else None))
-  in
-  let targets =
-    Option.bind selected ~f:(fun selected ->
-      let candidates = declarations valid selected in
-      if candidates = [] && declarations (overlays @ files) selected = []
-      then None
-      else (
-        let preferred =
-          List.filter candidates ~f:(fun (file, _) ->
-            String.is_suffix
-              file.source
-              ~suffix:(if implementation then ".ml" else ".mli"))
-        in
-        let candidates = if preferred = [] then candidates else preferred in
-        Some
-          (List.filter candidates ~f:(fun (file, o) ->
-             not (String.equal source file.source && o.first <= offset && offset <= o.last)))))
-  in
-  targets, stale
 ;;
 
 let position text offset ~encoding =

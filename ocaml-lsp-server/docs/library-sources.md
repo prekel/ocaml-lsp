@@ -12,9 +12,10 @@ the installation being browsed, so the original build tree is not required.
 
 Semantic highlighting remains available, along with hover and navigation where
 the installed artifacts provide enough information. Go to Definition and Go to
-Declaration prefer `.mli` declarations.
-On an interface declaration, Go to Definition opens its `.ml` body. Go to
-Implementation resolves values, types and modules to their implementation,
+Declaration prefer `.mli` declarations through Merlin Locate. A bounded syntax
+cache refines identifier ranges and known unsaved target declarations, without
+running the target's preprocessor or type checker.
+Go to Implementation resolves values, types and modules to their implementation,
 including unsaved implementation buffers.
 
 Find All References searches usages in the current workspaces, including when

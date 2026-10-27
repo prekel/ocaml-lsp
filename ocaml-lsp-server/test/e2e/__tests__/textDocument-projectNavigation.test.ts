@@ -283,7 +283,13 @@ describe("project definition and declaration navigation", () => {
       contentChanges: [{ text: "let value = 2\n" }],
     });
     expect(await pending).toEqual([target("lib.mli", "long_name")]);
-    expect(await snapshots()).toBe(before + 1);
+    expect(await snapshots()).toBe(before);
+    expect(
+      trace!.traceEvents.filter((event) => event.name === "definition"),
+    ).toHaveLength(1);
+    expect(
+      trace!.traceEvents.filter((event) => event.name === "definition range"),
+    ).toEqual([]);
     expect(warnings).toEqual([]);
   });
   it("keeps same-named units in separate libraries distinct", async () => {
@@ -362,6 +368,89 @@ describe("project definition and declaration navigation", () => {
     expect(await query("definition", "main.ml", "long_name")).toEqual([
       target("lib.mli", "long_name"),
     ]);
+  });
+  it("invalidates cached target syntax when a declaration is removed and restored", async () => {
+    await setup();
+    open("lib.mli");
+    expect(await query("definition", "main.ml", "long_name")).toEqual([
+      target("lib.mli", "long_name"),
+    ]);
+    const saved = texts["lib.mli"];
+    for (const [version, text] of [
+      [1, saved.replace("val long_name : int -> int\n", "")],
+      [2, "\n\n" + saved],
+    ] as const) {
+      texts["lib.mli"] = text;
+      server!.sendNotification(
+        Protocol.DidChangeTextDocumentNotification.type,
+        {
+          textDocument: { uri: uri("lib.mli"), version },
+          contentChanges: [{ text }],
+        },
+      );
+      expect(await query("definition", "main.ml", "long_name")).toEqual(
+        version === 1 ? [] : [target("lib.mli", "long_name")],
+      );
+    }
+  });
+  it("checks source digests after rapid same-size closed-file edits", async () => {
+    await setup();
+    await query("definition", "main.ml", "long_name");
+    const file = path.join(directory, "lib.mli");
+    const previous = fs.statSync(file);
+    fs.writeFileSync(file, texts["lib.mli"].replace("long_name", "lost_name"));
+    fs.utimesSync(file, previous.atime, previous.mtime);
+    expect(await query("definition", "main.ml", "long_name")).toEqual([]);
+  });
+  it("keeps type and value counterparts with the same spelling separate", async () => {
+    await setup({
+      "lib.ml": "type t = Constructor\nlet t = Constructor\n",
+      "lib.mli": "type t = Constructor\nval t : t\n",
+      "main.ml": "let value : Lib.t = Lib.t\n",
+    });
+    expect(await query("definition", "lib.mli", "type t", 5)).toEqual([
+      target("lib.ml", "type t", 5, 1),
+    ]);
+    expect(await query("definition", "lib.mli", "val t", 4)).toEqual([
+      target("lib.ml", "let t", 4, 1),
+    ]);
+  });
+  it("does not connect a hidden top-level binding to the public counterpart", async () => {
+    await setup({
+      "lib.ml":
+        "let long_name x = x\nlet first = long_name 1\nlet long_name x = x + first\n",
+      "lib.mli": "val long_name : int -> int\n",
+      "main.ml": "let result = Lib.long_name 1\n",
+    });
+    expect(await query("definition", "lib.ml", "long_name x")).toEqual([]);
+    expect(await query("definition", "lib.ml", "long_name x = x +")).toEqual([
+      target("lib.mli", "long_name"),
+    ]);
+  });
+  it("leaves uncertain include exports and module type members to explicit implementation navigation", async () => {
+    await setup({
+      "lib.ml":
+        "let long_name x = x\nlet first = long_name 1\ninclude struct let long_name x = x + first end\nmodule type S = sig type t end\n",
+      "lib.mli": "val long_name : int -> int\nmodule type S = sig type t end\n",
+      "main.ml": "let result = Lib.long_name 1\n",
+    });
+    expect(await query("definition", "lib.ml", "long_name x")).toEqual([]);
+    expect(await query("definition", "lib.mli", "t end")).toEqual([]);
+  });
+  it("selects an operator name without typing its target", async () => {
+    await setup({
+      "lib.ml": "let ( ++ ) a b = a + b\n",
+      "lib.mli": "val ( ++ ) : int -> int -> int\n",
+      "main.ml": "let result = Lib.( ++ ) 1 2\n",
+    });
+    const [location] = await query("definition", "main.ml", "++");
+    expect(location.uri).toBe(uri("lib.mli"));
+    expect(
+      texts["lib.mli"].slice(
+        location.range.start.character,
+        location.range.end.character,
+      ),
+    ).toContain("++");
   });
   it("does not return outdated positions in a changed closed interface", async () => {
     await setup();
