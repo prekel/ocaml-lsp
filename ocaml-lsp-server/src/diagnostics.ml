@@ -192,7 +192,11 @@ let send t which =
         | `All -> Set.empty (module Uri)
         | `One uri -> Set.remove t.dirty_uris uri);
     Hashtbl.fold pending ~init:[] ~f:(fun ~key:uri ~data:diagnostics acc ->
-      let diagnostics = diagnostics_of_range_map diagnostics in
+      let diagnostics =
+        if Option.is_some (Installed_library.root (Uri.to_path uri))
+        then []
+        else diagnostics_of_range_map diagnostics
+      in
       (* we don't include a version because some of the diagnostics might
          come from dune which reads from the file system and not from the
          editor's view *)
@@ -436,7 +440,11 @@ let compute_merlin_diagnostics diagnostics merlin =
 let merlin_diagnostics diagnostics merlin =
   let open Fiber.O in
   let uri = Document.Merlin.to_doc merlin |> Document.uri in
-  let+ all_diagnostics = compute_merlin_diagnostics diagnostics merlin in
+  let+ all_diagnostics =
+    if Document.Merlin.is_installed merlin
+    then Fiber.return []
+    else compute_merlin_diagnostics diagnostics merlin
+  in
   set diagnostics (`Merlin (uri, all_diagnostics))
 ;;
 

@@ -32,11 +32,19 @@ type t =
   ; symbols_thread : Lev_fiber.Thread.t Lazy_fiber.t
   ; wheel : Lev_fiber.Timer.Wheel.t
   ; hover_extended : hover_extended
+  ; navigation_syntax : Navigation_syntax.t
+  ; dune_navigation : Dune_navigation.t
+  ; dune_external : Dune_external.t
+  ; dune_semantic_refresh : bool ref
+  ; workspace_revision : int ref
+  ; reference_index : Reference_index.t
   }
 
 val create
   :  store:Document_store.t
   -> merlin:Lev_fiber.Thread.t
+  -> dune_navigation:Lev_fiber.Thread.t
+  -> dune_external:Dune_external.t
   -> detached:Fiber.Pool.t
   -> configuration:Configuration.t
   -> ocamlformat_rpc:Ocamlformat_rpc.t

@@ -44,7 +44,7 @@ let%expect_test "with-ppx" =
     []
     {
       "contents": {
-        "value": "(* ppx expect expansion *)\nPpx_expect_runtime.Current_file.unset ()",
+        "value": "(* ppx expect signature *)\nunit",
         "language": "ocaml"
       },
       "range": {

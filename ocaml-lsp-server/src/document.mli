@@ -28,6 +28,7 @@ module Single_pipeline : sig
   type t
 
   val create : Lev_fiber.Thread.t -> t
+  val run : t -> (unit -> 'a) -> 'a Fiber.t
 end
 
 val make
@@ -111,7 +112,8 @@ module Merlin : sig
     }
 
   val type_enclosing
-    :  ?name:string
+    :  ?source_type:Source_ast.type_target
+    -> ?name:string
     -> t
     -> Msource.position
     -> (* verbosity *) int
@@ -121,6 +123,7 @@ module Merlin : sig
   val kind : t -> Kind.t
   val to_doc : t -> doc
   val mconfig : t -> Mconfig.t Fiber.t
+  val is_installed : t -> bool
 end
 
 val kind : t -> [ `Merlin of Merlin.t | `Other ]

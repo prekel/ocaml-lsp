@@ -204,6 +204,8 @@ type db =
   { running : (string, entry) Hashtbl.t
   ; pool : Fiber.Pool.t
   ; trace : trace
+  ; worker : Lev_fiber.Thread.t
+  ; installed : Installed_library.t
   }
 
 and entry =
@@ -428,45 +430,62 @@ let create db path =
   { path; directory; initial; db; entry = None }
 ;;
 
+let is_installed t = Option.is_some (Installed_library.root t.path)
+
 let config (t : t) : Mconfig.t Fiber.t =
   let use_entry entry =
     Entry.incr entry;
     t.entry <- Some entry
   in
   let* () = Fiber.return () in
-  if !prefer_dot_merlin
-  then Fiber.return (Mconfig.get_external_config t.path t.initial)
-  else (
-    match find_project_context t.directory with
-    | None ->
-      let+ () = destroy t in
-      Mconfig.get_external_config t.path t.initial
-    | Some (ctx, config_path) ->
-      let* dot, failures =
-        let* entry = get_process t.db ~dir:ctx.process_dir in
-        match entry with
-        | Error failure ->
-          let+ () = destroy t in
-          empty, [ failure ]
-        | Ok entry ->
-          let* () =
-            match t.entry with
-            | None ->
-              use_entry entry;
-              Fiber.return ()
-            | Some entry' ->
-              if Entry.equal entry entry'
-              then Fiber.return ()
-              else
-                let+ () = destroy t in
-                use_entry entry
-          in
-          get_config entry.process ~workdir:ctx.workdir t.path
-      in
-      let merlin =
-        Mconfig.merge_merlin_config dot t.initial.merlin ~failures ~config_path
-      in
-      Fiber.return (Mconfig.normalize { t.initial with merlin }))
+  match Installed_library.root t.path with
+  | Some root ->
+    let* () = destroy t in
+    (match
+       Lev_fiber.Thread.task t.db.worker ~f:(fun () ->
+         Installed_library.config t.db.installed ~root ~path:t.path t.initial)
+     with
+     | Error `Stopped -> Fiber.never
+     | Ok task ->
+       let+ result = Lev_fiber.Thread.await task in
+       (match result with
+        | Ok config -> config
+        | Error (`Exn exn) -> Exn_with_backtrace.reraise exn
+        | Error `Cancelled -> t.initial))
+  | None ->
+    if !prefer_dot_merlin
+    then Fiber.return (Mconfig.get_external_config t.path t.initial)
+    else (
+      match find_project_context t.directory with
+      | None ->
+        let+ () = destroy t in
+        Mconfig.get_external_config t.path t.initial
+      | Some (ctx, config_path) ->
+        let* dot, failures =
+          let* entry = get_process t.db ~dir:ctx.process_dir in
+          match entry with
+          | Error failure ->
+            let+ () = destroy t in
+            empty, [ failure ]
+          | Ok entry ->
+            let* () =
+              match t.entry with
+              | None ->
+                use_entry entry;
+                Fiber.return ()
+              | Some entry' ->
+                if Entry.equal entry entry'
+                then Fiber.return ()
+                else
+                  let+ () = destroy t in
+                  use_entry entry
+            in
+            get_config entry.process ~workdir:ctx.workdir t.path
+        in
+        let merlin =
+          Mconfig.merge_merlin_config dot t.initial.merlin ~failures ~config_path
+        in
+        Fiber.return (Mconfig.normalize { t.initial with merlin }))
 ;;
 
 module DB = struct
@@ -474,8 +493,13 @@ module DB = struct
 
   let get t uri = create t uri
 
-  let create ~trace =
-    { running = Hashtbl.create (module String); pool = Fiber.Pool.create (); trace }
+  let create ~trace ~worker =
+    { running = Hashtbl.create (module String)
+    ; pool = Fiber.Pool.create ()
+    ; trace
+    ; worker
+    ; installed = Installed_library.create ()
+    }
   ;;
 
   let run t = Fiber.Pool.run t.pool

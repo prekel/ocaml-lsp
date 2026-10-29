@@ -5,7 +5,7 @@ open Fiber.O
    in an interface. Keep the declaration's path through nested modules so that
    we can resolve it with Merlin's shape-backed locator in the implementation's
    typing environment. *)
-let type_path_at_position doc position =
+let declaration_path_at_position ?(strict = true) doc position =
   Document.Merlin.with_pipeline_exn ~name:"implementation" doc (fun pipeline ->
     let position = Mpipeline.get_lexing_pos pipeline (Position.logical position) in
     let enclosing =
@@ -14,12 +14,19 @@ let type_path_at_position doc position =
       in
       Mbrowse.enclosing position [ browse ]
     in
+    let at name loc =
+      Loc.compare_pos position name = 0
+      || ((not strict) && position.pos_cnum = loc.Loc.loc_start.pos_cnum)
+    in
     match
       List.find_map enclosing ~f:(fun (_, (node : Browse_raw.node)) ->
         match node with
-        | Type_declaration declaration
-          when Loc.compare_pos position declaration.typ_name.loc = 0 ->
-          Some declaration.typ_name.txt
+        | Type_declaration d when at d.typ_name.loc d.typ_loc ->
+          Some (`Type, d.typ_name.txt, d.typ_name.loc)
+        | Value_description d when at d.val_name.loc d.val_loc ->
+          Some (`Vals, d.val_name.txt, d.val_name.loc)
+        | Module_declaration d when at d.md_name.loc d.md_loc ->
+          Option.map d.md_name.txt ~f:(fun name -> `Mod, name, d.md_name.loc)
         | _ -> None)
     with
     | None -> None
@@ -31,16 +38,19 @@ let type_path_at_position doc position =
              | Module_expr { mod_desc = Tmod_functor (Named (_, _, parameter), _); _ } ->
                Loc.compare_pos position parameter.mty_loc = 0
              | _ -> false) -> None
-    | Some name ->
+    | Some (namespace, name, selected) ->
       let modules =
         List.filter_map enclosing ~f:(fun (_, (node : Browse_raw.node)) ->
           match node with
-          | Module_declaration { md_name = { txt = Some name; _ }; _ }
-          | Module_binding { mb_name = { txt = Some name; _ }; _ } -> Some name
+          | Module_declaration { md_name = { txt = Some name; loc }; _ }
+          | Module_binding { mb_name = { txt = Some name; loc }; _ }
+            when loc.loc_start.pos_cnum <> selected.loc_start.pos_cnum -> Some name
           | _ -> None)
         |> List.rev
       in
-      Longident.unflatten (modules @ [ name ]))
+      Option.map
+        (Longident.unflatten (modules @ [ name ]))
+        ~f:(fun path -> namespace, path))
 ;;
 
 (* A functor result has no ordinary path such as [F.t]. Expose each result as a
@@ -87,10 +97,18 @@ let rec module_environment env (lid : Longident.t) =
   Some (env, Longident.Lident (Ident.name id))
 ;;
 
-let lookup_type =
+let lookup namespace =
   let lookup env lid =
-    Merlin_analysis.Env_lookup.by_longident [ `Type ] lid env
-    |> Option.map ~f:(fun (path, _) -> env, path)
+    try
+      let path =
+        match namespace with
+        | `Type -> fst (Env.find_type_by_name lid env)
+        | `Vals -> fst (Env.find_value_by_name lid env)
+        | `Mod -> fst (Env.find_module_by_name lid env)
+      in
+      Some (env, path)
+    with
+    | Not_found -> None
   in
   fun env lid ->
     match lookup env lid with
@@ -104,13 +122,53 @@ let lookup_type =
          lookup env (Longident.Ldot ({ parent with txt = lid }, name)))
 ;;
 
-let location_in_document doc path =
+let declaration_source config uid (loc : Loc.t) =
+  let unit_name =
+    match uid with
+    | Ocaml_typing.Shape.Uid.Item { comp_unit; _ } -> Some comp_unit
+    | Compilation_unit name -> Some name
+    | Internal | Predef _ | Local_opaque_item _ -> None
+  in
+  let owner =
+    Option.bind unit_name ~f:(fun name ->
+      List.find_map
+        (Mconfig.build_path config @ Mconfig.cmt_path config)
+        ~f:(fun directory ->
+          List.find_map
+            [ name; Stdlib.String.uncapitalize_ascii name ]
+            ~f:(fun name ->
+              if Sys.file_exists (Filename.concat directory (name ^ ".cmi"))
+              then Some directory
+              else None)))
+  in
+  let recorded = loc.loc_start.pos_fname in
+  let installed =
+    Option.to_list owner
+    |> List.filter ~f:(fun directory ->
+      Option.is_some (Installed_library.root (Filename.concat directory "source.ml")))
+  in
+  let candidates =
+    List.map installed ~f:(fun dir -> Filename.concat dir (Filename.basename recorded))
+    @ List.map (config.query.directory :: Mconfig.source_path config) ~f:(fun dir ->
+      Filename.concat dir (Filename.basename recorded))
+    @ [ recorded ]
+  in
+  List.find_map candidates ~f:(fun path ->
+    try
+      if (Unix.stat path).st_kind = S_REG
+      then Some (Uri.of_path (Unix.realpath path))
+      else None
+    with
+    | Unix.Unix_error _ | Sys_error _ -> None)
+;;
+
+let location_in_document doc (namespace, path) =
   match Document.kind doc with
   | `Other -> Fiber.return None
   | `Merlin doc ->
     Document.Merlin.with_pipeline_exn ~name:"implementation" doc (fun pipeline ->
       let typer = Mpipeline.typer_result pipeline in
-      match lookup_type (Mtyper.get_env typer) path with
+      match lookup namespace (Mtyper.get_env typer) path with
       | None -> None
       | Some (env, path) ->
         (match
@@ -121,11 +179,37 @@ let location_in_document doc path =
              }
            in
            let local_defs = Mtyper.get_typedtree typer in
-           Merlin_analysis.Locate.from_path ~config ~env ~local_defs ~namespace:Type path
+           Merlin_analysis.Locate.from_path
+             ~config
+             ~env
+             ~local_defs
+             ~namespace:
+               (match namespace with
+                | `Type -> Type
+                | `Vals -> Value
+                | `Mod -> Module)
+             path
          with
          | `Found
              { uid = Ocaml_typing.Shape.Uid.Item { from = Impl; _ }; file; location; _ }
-           -> Some { Location.uri = Uri.of_path file; range = Range.of_loc location }
+           ->
+           let position =
+             Mpipeline.get_lexing_pos
+               pipeline
+               (`Logical
+                   ( location.loc_start.pos_lnum
+                   , location.loc_start.pos_cnum - location.loc_start.pos_bol ))
+           in
+           let range =
+             Option.value
+               (Navigation.definition_range
+                  pipeline
+                  position
+                  ~type_definition:true
+                  ~source_position:None)
+               ~default:(Range.of_loc location)
+           in
+           Some (`Target { Location.uri = Uri.of_path file; range })
          (* Smart locate can fall back to a declaration in an interface-only
             dependency. That is not an implementation. *)
          | `Found _ | `Builtin _ | `File_not_found _ | `Not_found _ | `Not_in_env _ ->
@@ -148,20 +232,116 @@ let with_document (state : State.t) uri f =
        Fiber.finalize (fun () -> f doc) ~finally:(fun () -> Document.close doc))
 ;;
 
+let implementation_source uri =
+  match Filename.extension (Uri.to_path uri) with
+  | ".ml" | ".re" | ".eliom" -> true
+  | _ -> false
+;;
+
+let rec declaration_locations state merlin uri path seen =
+  let key = Uri.to_string uri, path in
+  if List.mem seen key ~equal:Poly.equal
+  then Fiber.return []
+  else
+    let+ results =
+      Document.get_impl_intf_counterparts (Some merlin) uri
+      |> Fiber.sequential_map ~f:(fun implementation_uri ->
+        with_document state implementation_uri (fun doc -> location_in_document doc path)
+        >>= function
+        | None -> Fiber.return []
+        | Some (`Target location) -> Fiber.return [ location ]
+        | Some (`Declaration (target_uri, target)) ->
+          let+ found =
+            with_document state target_uri (fun doc ->
+              match Document.kind doc, Position.of_lexical_position target with
+              | `Merlin merlin, Some position when Document.Merlin.kind merlin = Intf ->
+                let* path = declaration_path_at_position ~strict:false merlin position in
+                (match path with
+                 | None -> Fiber.return None
+                 | Some path ->
+                   let+ locations =
+                     declaration_locations state merlin target_uri path (key :: seen)
+                   in
+                   Some locations)
+              | _ -> Fiber.return None)
+          in
+          Option.value found ~default:[])
+    in
+    List.concat results
+;;
+
+let resolve_declaration state merlin uri path =
+  let+ locations = declaration_locations state merlin uri path [] in
+  match locations with
+  | [] -> None
+  | locations -> Some (`Location locations)
+;;
+
 let run (state : State.t) uri position =
   match Document.kind (Document_store.get state.store uri) with
   | `Other -> Fiber.return None
-  | `Merlin merlin when Document.Merlin.kind merlin = Impl -> Fiber.return None
   | `Merlin merlin ->
-    type_path_at_position merlin position
-    >>= (function
-     | None -> Fiber.return None
-     | Some path ->
-       Document.get_impl_intf_counterparts (Some merlin) uri
-       |> Fiber.parallel_map ~f:(fun implementation_uri ->
-         with_document state implementation_uri (fun doc -> location_in_document doc path))
-       >>| List.filter_opt
-       >>| (function
-        | [] -> None
-        | locations -> Some (`Location locations)))
+    let* declaration =
+      if Document.Merlin.kind merlin = Intf
+      then declaration_path_at_position merlin position
+      else Fiber.return None
+    in
+    (match declaration with
+     | Some path -> resolve_declaration state merlin uri path
+     | None ->
+       let* located =
+         Document.Merlin.dispatch_exn
+           merlin
+           (Query_protocol.Locate (None, `MLI, Position.logical position))
+       in
+       let* resolved =
+         match located with
+         | `Found (file, target) ->
+           let target_uri = Option.fold file ~init:uri ~f:(fun _ p -> Uri.of_path p) in
+           with_document state target_uri (fun doc ->
+             match Document.kind doc, Position.of_lexical_position target with
+             | `Merlin target, Some position when Document.Merlin.kind target = Intf ->
+               let* path = declaration_path_at_position ~strict:false target position in
+               (match path with
+                | None -> Fiber.return None
+                | Some path -> resolve_declaration state target target_uri path)
+             | _ -> Fiber.return None)
+         | _ -> Fiber.return None
+       in
+       (match resolved with
+        | Some _ -> Fiber.return resolved
+        | None ->
+          let* result =
+            Document.Merlin.dispatch_exn
+              merlin
+              (Query_protocol.Locate (None, `ML, Position.logical position))
+          in
+          (match result with
+           | `Found (file, target) ->
+             let target_uri = Option.fold file ~init:uri ~f:(fun _ p -> Uri.of_path p) in
+             if not (implementation_source target_uri)
+             then Fiber.return None
+             else
+               with_document state target_uri (fun doc ->
+                 match Document.kind doc with
+                 | `Other -> Fiber.return None
+                 | `Merlin target_doc ->
+                   let+ range =
+                     Document.Merlin.with_pipeline_exn target_doc (fun pipeline ->
+                       Navigation.definition_range
+                         pipeline
+                         target
+                         ~type_definition:true
+                         ~source_position:None)
+                   in
+                   Option.map (Position.of_lexical_position target) ~f:(fun start ->
+                     `Location
+                       [ Location.create
+                           ~uri:target_uri
+                           ~range:
+                             (Option.value
+                                range
+                                ~default:(Range.create ~start ~end_:start))
+                       ]))
+           | _ -> Fiber.return None)))
 ;;

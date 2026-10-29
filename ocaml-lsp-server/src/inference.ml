@@ -59,6 +59,7 @@ let infer_intf_for_impl doc =
         | `Interface _ -> assert false
         | `Implementation doc -> doc.str_type
       in
+      let sig_ = Ppx_deriving.public_signature sig_ in
       let env = Mtyper.initial_env typer in
       let verbosity = (Mpipeline.final_config pipeline).query.verbosity in
       Printtyp.wrap_printing_env ~verbosity env (fun () ->

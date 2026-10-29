@@ -145,6 +145,7 @@ let%expect_test "start/stop" =
     client: server initialized with:
     {
       "capabilities": {
+        "callHierarchyProvider": true,
         "codeActionProvider": {
           "codeActionKinds": [
             "quickfix", "refactor.extract", "refactor.inline", "combine-cases",
@@ -173,10 +174,10 @@ let%expect_test "start/stop" =
         "documentSymbolProvider": true,
         "executeCommandProvider": {
           "commands": [
-            "ocamllsp/view-metrics", "ocamllsp/open-related-source",
-            "ocamllsp/open-dune-file", "ocamllsp/merlin-jump-to-target",
-            "ocamllsp/show-document-text", "ocamllsp/show-merlin-config",
-            "dune/promote"
+            "ocamllsp/view-metrics", "ocamllsp/show-ppx-expansion",
+            "ocamllsp/open-related-source", "ocamllsp/open-dune-file",
+            "ocamllsp/merlin-jump-to-target", "ocamllsp/show-document-text",
+            "ocamllsp/show-merlin-config", "dune/promote"
           ]
         },
         "experimental": {

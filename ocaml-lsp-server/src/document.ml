@@ -129,6 +129,7 @@ module Single_pipeline : sig
   type t
 
   val create : Lev_fiber.Thread.t -> t
+  val run : t -> (unit -> 'a) -> 'a Fiber.t
 
   val use
     :  ?name:string
@@ -149,6 +150,16 @@ end = struct
   type t = { thread : Lev_fiber.Thread.t } [@@unboxed]
 
   let create thread = { thread }
+
+  let run t f =
+    match Lev_fiber.Thread.task t.thread ~f with
+    | Error `Stopped -> Fiber.never
+    | Ok task ->
+      let+ result = await task in
+      (match result with
+       | Ok x -> x
+       | Error exn -> Exn_with_backtrace.reraise exn)
+  ;;
 
   let use_with_config ?name t ~doc ~config ~f =
     let make_pipeline =
@@ -354,6 +365,7 @@ module Merlin = struct
   ;;
 
   let mconfig (t : t) = Merlin_config.config t.merlin_config
+  let is_installed (t : t) = Merlin_config.is_installed t.merlin_config
 
   let with_pipeline_exn ?name doc f =
     with_pipeline ?name doc f
@@ -404,7 +416,7 @@ module Merlin = struct
     ; syntax_doc : Query_protocol.syntax_doc_result option
     }
 
-  let type_enclosing ?name doc pos verbosity ~with_syntax_doc =
+  let type_enclosing ?source_type ?name doc pos verbosity ~with_syntax_doc =
     with_pipeline_exn ?name doc (fun pipeline ->
       let command = Query_protocol.Type_enclosing (None, pos, Some 0) in
       let pipeline =
@@ -418,9 +430,17 @@ module Merlin = struct
           in
           Mpipeline.make config source
       in
-      match Query_commands.dispatch pipeline command with
-      | [] | (_, `Index _, _) :: _ -> None
-      | (loc, `String typ, _) :: _ ->
+      let res =
+        match source_type with
+        | None ->
+          (match Query_commands.dispatch pipeline command with
+           | (loc, `String typ, _) :: _ -> Some (loc, typ)
+           | _ -> None)
+        | Some target -> Source_ast.type_enclosing pipeline target pos
+      in
+      match res with
+      | None -> None
+      | Some (loc, typ) ->
         let doc = doc_comment pipeline pos in
         let syntax_doc = if with_syntax_doc then syntax_doc pipeline pos else None in
         Some { loc; typ; doc; syntax_doc })

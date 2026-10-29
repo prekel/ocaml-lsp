@@ -56,15 +56,15 @@ let%expect_test "distinguishes a definition from a declaration" =
   [%expect
     {|
     definition:
-    lib.ml
+    lib.mli
     {
-      "end": { "character": 4, "line": 0 },
+      "end": { "character": 5, "line": 0 },
       "start": { "character": 4, "line": 0 }
     }
     declaration:
     lib.mli
     {
-      "end": { "character": 4, "line": 0 },
+      "end": { "character": 5, "line": 0 },
       "start": { "character": 4, "line": 0 }
     }
     |}]

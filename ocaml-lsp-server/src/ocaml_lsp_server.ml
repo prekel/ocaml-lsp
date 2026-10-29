@@ -114,6 +114,7 @@ let initialize_info (client_capabilities : ClientCapabilities.t) : InitializeRes
         if Action_open_related.available (Capabilities.show_document client_capabilities)
         then
           view_metrics_command_name
+          :: Action_show_ppx_expansion.command_name
           :: Action_open_related.command_name
           :: Action_open_dune.command_name
           :: Action_jump.command_name
@@ -165,6 +166,7 @@ let initialize_info (client_capabilities : ClientCapabilities.t) : InitializeRes
       ~hoverProvider:(`Bool true)
       ~declarationProvider:(`Bool true)
       ~definitionProvider:(`Bool true)
+      ~callHierarchyProvider:(`Bool true)
       ~typeDefinitionProvider:(`Bool true)
       ~implementationProvider:(`Bool true)
       ~completionProvider
@@ -241,6 +243,7 @@ let set_diagnostics detached diagnostics doc =
 
 let register_dune_and_cram_text_document_sync server (capabilities : ClientCapabilities.t)
   =
+  let open Lsp.Types in
   if Capabilities.text_document_sync_dynamic_registration capabilities
   then (
     let documentSelector =
@@ -257,7 +260,23 @@ let register_dune_and_cram_text_document_sync server (capabilities : ClientCapab
       let id = "ocamllsp-cram-dune-files/" ^ method_ in
       Registration.create ~id ~method_ ~registerOptions ()
     in
-    let registrations = [ make "textDocument/didOpen"; make "textDocument/didClose" ] in
+    let change_options =
+      TextDocumentChangeRegistrationOptions.create
+        ~documentSelector
+        ~syncKind:TextDocumentSyncKind.Incremental
+        ()
+      |> TextDocumentChangeRegistrationOptions.yojson_of_t
+    in
+    let registrations =
+      [ make "textDocument/didOpen"
+      ; make "textDocument/didClose"
+      ; Registration.create
+          ~id:"ocamllsp-cram-dune-files/textDocument/didChange"
+          ~method_:"textDocument/didChange"
+          ~registerOptions:change_options
+          ()
+      ]
+    in
     let params = RegistrationParams.create ~registrations in
     Server.request server (Server_request.ClientRegisterCapability params))
   else Fiber.return ()
@@ -425,7 +444,11 @@ let text_document_lens
   | `Other -> Fiber.return []
   | `Merlin m when Document.Merlin.kind m = Intf -> Fiber.return []
   | `Merlin doc ->
-    let+ outline = Document.Merlin.dispatch_exn ~name:"outline" doc Outline in
+    let+ source, outline =
+      Document.Merlin.with_pipeline_exn ~name:"outline" doc (fun pipeline ->
+        ( Source_ast.create (Mpipeline.reader_parsetree pipeline)
+        , Query_commands.dispatch pipeline Outline ))
+    in
     let rec symbol_info_of_outline_item (item : Query_protocol.item) =
       let children =
         if for_nested_bindings
@@ -434,6 +457,7 @@ let text_document_lens
       in
       match item.outline_type with
       | None -> children
+      | Some _ when not (Source_ast.contains_outline source item) -> children
       | Some typ ->
         let loc = item.location in
         let info =
@@ -480,7 +504,7 @@ let selection_range
       >>| selection_range_of_enclosings pos)
 ;;
 
-let references
+let native_references
       rpc
       (state : State.t)
       { ReferenceParams.textDocument = { uri }; position; context; _ }
@@ -597,6 +621,135 @@ let document_symbol (state : State.t) uri =
   Document_symbol.run client_capabilities doc uri
 ;;
 
+let register_dune_navigation server (state : State.t) =
+  let open Lsp.Types in
+  let capabilities = State.client_capabilities state in
+  let selector languages =
+    List.map languages ~f:(fun language ->
+      `TextDocumentFilter
+        (`TextDocumentFilterLanguage (TextDocumentFilterLanguage.create ~language ())))
+  in
+  let dune = selector [ "dune"; "dune-project"; "dune-workspace" ] in
+  let make method_ registerOptions =
+    Registration.create
+      ~id:("ocamllsp-dune-navigation/" ^ method_)
+      ~method_
+      ~registerOptions
+      ()
+  in
+  let supported f =
+    Option.value (Option.bind capabilities.textDocument ~f) ~default:false
+  in
+  let registrations = [] in
+  let registrations =
+    List.fold_left
+      [ ( "textDocument/definition"
+        , supported (fun td ->
+            Option.bind td.definition ~f:(fun d -> d.dynamicRegistration)) )
+      ; ( "textDocument/declaration"
+        , supported (fun td ->
+            Option.bind td.declaration ~f:(fun d -> d.dynamicRegistration)) )
+      ]
+      ~init:registrations
+      ~f:(fun registrations (method_, enabled) ->
+        if enabled
+        then
+          make
+            method_
+            (TextDocumentRegistrationOptions.create ~documentSelector:dune ()
+             |> TextDocumentRegistrationOptions.yojson_of_t)
+          :: registrations
+        else registrations)
+  in
+  let watches =
+    let open Option.O in
+    let* workspace = capabilities.workspace in
+    let* watched = workspace.didChangeWatchedFiles in
+    watched.dynamicRegistration
+  in
+  let registrations =
+    if
+      supported (fun td ->
+        Option.bind td.semanticTokens ~f:(fun tokens -> tokens.dynamicRegistration))
+    then
+      make
+        "textDocument/semanticTokens"
+        (SemanticTokensRegistrationOptions.create
+           ~documentSelector:dune
+           ~legend:
+             (Semantic_highlighting.legend
+                (Semantic_highlighting.create_config
+                   (Option.value_exn (Capabilities.semantic_tokens capabilities))))
+           ~full:
+             (`SemanticTokensFullDelta (SemanticTokensFullDelta.create ~delta:true ()))
+           ()
+         |> SemanticTokensRegistrationOptions.yojson_of_t)
+      :: registrations
+    else registrations
+  in
+  let registrations =
+    if watches = Some true
+    then (
+      let watchers =
+        [ FileSystemWatcher.create ~globPattern:(`Pattern "**/{dune,dune-project}") () ]
+      in
+      make
+        "workspace/didChangeWatchedFiles"
+        (DidChangeWatchedFilesRegistrationOptions.create ~watchers
+         |> DidChangeWatchedFilesRegistrationOptions.yojson_of_t)
+      :: registrations)
+    else registrations
+  in
+  match registrations with
+  | [] -> Fiber.return ()
+  | _ ->
+    task_if_running state.detached ~f:(fun () ->
+      let+ () =
+        Server.request
+          server
+          (Server_request.ClientRegisterCapability
+             (RegistrationParams.create ~registrations))
+      in
+      if watches = Some true then Dune_navigation.watch_files state.dune_navigation)
+;;
+
+let refresh_dune_navigation (state : State.t) =
+  let roots = Dune_navigation_query.roots state in
+  task_if_running state.detached ~f:(fun () ->
+    Dune_navigation.refresh state.dune_navigation ~roots)
+;;
+
+let semantic_refresh_supported state =
+  let open Option.O in
+  let* workspace = (State.client_capabilities state).workspace in
+  let* semantic = workspace.semanticTokens in
+  semantic.refreshSupport
+;;
+
+let refresh_dune_semantics server (state : State.t) =
+  if semantic_refresh_supported state <> Some true || !(state.dune_semantic_refresh)
+  then Fiber.return ()
+  else (
+    state.dune_semantic_refresh := true;
+    task_if_running state.detached ~f:(fun () ->
+      let* () = Lev_fiber.Timer.sleepf 0.05 in
+      state.dune_semantic_refresh := false;
+      let* running = Fiber.Pool.running state.detached in
+      if running
+      then Server.request server Server_request.SemanticTokensRefresh
+      else Fiber.return ()))
+;;
+
+let dune_definition server (state : State.t) doc position =
+  let roots = Dune_navigation_query.roots state in
+  let+ result = Dune_navigation_query.definition state doc position in
+  if roots <> Dune_navigation_query.roots (Server.state server)
+  then
+    Jsonrpc.Response.Error.raise
+      (make_error ~code:ContentModified ~message:"Dune workspaces changed" ());
+  result
+;;
+
 let on_request
   : type resp.
     State.t Server.t -> resp Client_request.t -> (resp Reply.t * State.t) Fiber.t
@@ -693,6 +846,11 @@ let on_request
         server
     else if String.equal command.command view_metrics_command_name
     then later (fun _state server -> view_metrics server) server
+    else if String.equal command.command Action_show_ppx_expansion.command_name
+    then
+      later
+        (fun _state server -> Action_show_ppx_expansion.command_run server command)
+        server
     else if String.equal command.command Action_open_related.command_name
     then
       later (fun _state server -> Action_open_related.command_run server command) server
@@ -746,7 +904,17 @@ let on_request
          | Some _ | None -> Hover_req.Default
        in
        later (fun (_ : State.t) () -> Hover_req.handle rpc req mode) ())
-  | TextDocumentReferences req -> later (references rpc) req
+  | TextDocumentReferences req ->
+    let doc = Document_store.get store req.textDocument.uri in
+    later
+      (fun state req ->
+         Project_references.run
+           rpc
+           ~doc
+           ~native:(fun () -> native_references rpc state req)
+           state
+           req)
+      req
   | TextDocumentCodeLensResolve codeLens -> now codeLens
   | TextDocumentCodeLens req ->
     (match state.configuration.data.codelens with
@@ -760,9 +928,19 @@ let on_request
   | TextDocumentHighlight req -> later highlight req
   | DocumentSymbol { textDocument = { uri }; _ } -> later document_symbol uri
   | TextDocumentDeclaration { textDocument = { uri }; position; _ } ->
-    later (fun state () -> Definition_query.run `Declaration state uri position) ()
+    let doc = Document_store.get store uri in
+    (match Document.syntax doc with
+     | Dune -> later (fun state () -> dune_definition server state doc position) ()
+     | _ ->
+       later
+         (fun state () -> Definition_query.run `Declaration state ~doc uri position)
+         ())
   | TextDocumentDefinition { textDocument = { uri }; position; _ } ->
-    later (fun state () -> Definition_query.run `Definition state uri position) ()
+    let doc = Document_store.get store uri in
+    (match Document.syntax doc with
+     | Dune -> later (fun state () -> dune_definition server state doc position) ()
+     | _ ->
+       later (fun state () -> Definition_query.run `Definition state ~doc uri position) ())
   | TextDocumentTypeDefinition { textDocument = { uri }; position; _ } ->
     later (fun state () -> Definition_query.run `Type_definition state uri position) ()
   | TextDocumentImplementation { textDocument = { uri }; position; _ } ->
@@ -820,9 +998,9 @@ let on_request
   | SemanticTokensFull p -> later Semantic_highlighting.on_request_full p
   | SemanticTokensDelta p -> later Semantic_highlighting.on_request_full_delta p
   | TextDocumentMoniker _ -> Server.not_supported ()
-  | TextDocumentPrepareCallHierarchy _ -> Server.not_supported ()
-  | CallHierarchyIncomingCalls _ -> Server.not_supported ()
-  | CallHierarchyOutgoingCalls _ -> Server.not_supported ()
+  | TextDocumentPrepareCallHierarchy req -> later (Call_hierarchy.prepare rpc) req
+  | CallHierarchyIncomingCalls req -> later (Call_hierarchy.incoming rpc) req
+  | CallHierarchyOutgoingCalls req -> later (Call_hierarchy.outgoing rpc) req
   | SemanticTokensRange _ -> Server.not_supported ()
   | LinkedEditingRange _ -> Server.not_supported ()
   | WillCreateFiles _ -> Server.not_supported ()
@@ -856,6 +1034,11 @@ let on_notification server (notification : Client_notification.t) : State.t Fibe
         params
     in
     let* () = Document_store.open_document store doc in
+    let* () =
+      if Document.syntax doc = Dune
+      then refresh_dune_semantics server state
+      else Fiber.return ()
+    in
     let+ () = set_diagnostics state.detached (State.diagnostics state) doc in
     state
   | TextDocumentDidClose { textDocument = { uri } } ->
@@ -870,6 +1053,11 @@ let on_notification server (notification : Client_notification.t) : State.t Fibe
     let doc =
       Document_store.change_document store uri ~f:(fun prev_doc ->
         Document.update_text ~version prev_doc contentChanges)
+    in
+    let* () =
+      if Document.syntax doc = Dune
+      then refresh_dune_semantics server state
+      else Fiber.return ()
     in
     let+ () = set_diagnostics state.detached (State.diagnostics state) doc in
     state
@@ -915,6 +1103,11 @@ let on_notification server (notification : Client_notification.t) : State.t Fibe
         @@ fun () -> Log.msg "saved document is not in the store" []);
        Fiber.return state
      | Some doc ->
+       let* () =
+         if Document.syntax doc = Dune
+         then refresh_dune_semantics server state
+         else Fiber.return ()
+       in
        let+ () = set_diagnostics state.detached (State.diagnostics state) doc in
        state)
   | ChangeWorkspaceFolders change ->
@@ -922,14 +1115,23 @@ let on_notification server (notification : Client_notification.t) : State.t Fibe
       State.modify_workspaces state ~f:(fun ws -> Workspaces.on_change ws change)
     in
     Dune.update_workspaces (State.dune state) (State.workspaces state);
-    Fiber.return state
+    let* () = refresh_dune_semantics server state in
+    let+ () = refresh_dune_navigation state in
+    state
   | Initialized _ ->
+    let* () = register_dune_navigation server state in
+    let* () = refresh_dune_navigation state in
     let+ () =
       task_if_running state.detached ~f:(fun () ->
         register_dune_and_cram_text_document_sync server (State.client_capabilities state))
     in
     state
-  | DidChangeWatchedFiles _
+  | DidChangeWatchedFiles { changes } ->
+    Dune_navigation.invalidate
+      state.dune_navigation
+      (List.map changes ~f:(fun (e : Lsp.Types.FileEvent.t) -> Uri.to_path e.uri));
+    let+ () = refresh_dune_semantics server state in
+    state
   | DidCreateFiles _
   | DidDeleteFiles _
   | DidRenameFiles _
@@ -963,6 +1165,11 @@ let start stream =
   let* configuration = Configuration.default () in
   let wheel = Configuration.wheel configuration in
   let* merlin = Lev_fiber.Thread.create () in
+  let* dune_navigation = Lev_fiber.Thread.create () in
+  let* external_interactive = Lev_fiber.Thread.create () in
+  let dune_external =
+    Dune_external.create ~interactive:external_interactive ~pool:detached
+  in
   let server =
     let symbols_thread = Lazy_fiber.create Lev_fiber.Thread.create in
     Fdecl.set
@@ -973,6 +1180,8 @@ let start stream =
          (State.create
             ~store
             ~merlin
+            ~dune_navigation
+            ~dune_external
             ~ocamlformat_rpc
             ~ocp_indent
             ~configuration
@@ -1021,7 +1230,12 @@ let start stream =
     in
     let cleanup () =
       let finalize =
-        [ Document_store.close_all store
+        [ Dune_external.stop dune_external
+        ; Fiber.of_thunk (fun () ->
+            Lev_fiber.Thread.close dune_navigation;
+            Lev_fiber.Thread.close external_interactive;
+            Fiber.return ())
+        ; Document_store.close_all store
         ; Fiber.Pool.stop detached
         ; Ocamlformat_rpc.stop ocamlformat_rpc
         ; Ocp_indent.stop ocp_indent

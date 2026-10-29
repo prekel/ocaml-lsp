@@ -26,11 +26,19 @@ type t =
   ; symbols_thread : Lev_fiber.Thread.t Lazy_fiber.t
   ; wheel : Lev_fiber.Timer.Wheel.t
   ; hover_extended : hover_extended
+  ; navigation_syntax : Navigation_syntax.t
+  ; dune_navigation : Dune_navigation.t
+  ; dune_external : Dune_external.t
+  ; dune_semantic_refresh : bool ref
+  ; workspace_revision : int ref
+  ; reference_index : Reference_index.t
   }
 
 let create
       ~store
       ~merlin
+      ~dune_navigation
+      ~dune_external
       ~detached
       ~configuration
       ~ocamlformat_rpc
@@ -40,7 +48,7 @@ let create
       ~trace
   =
   { init = Uninitialized
-  ; merlin_config = Merlin_config.DB.create ~trace
+  ; merlin_config = Merlin_config.DB.create ~trace ~worker:merlin
   ; store
   ; merlin = Document.Single_pipeline.create merlin
   ; detached
@@ -51,6 +59,12 @@ let create
   ; symbols_thread
   ; wheel
   ; hover_extended = { history = None }
+  ; navigation_syntax = Navigation_syntax.create ()
+  ; dune_navigation = Dune_navigation.create dune_navigation
+  ; dune_external
+  ; dune_semantic_refresh = ref false
+  ; workspace_revision = ref 0
+  ; reference_index = Reference_index.create ()
   }
 ;;
 
@@ -104,6 +118,7 @@ let initialize
       diagnostics
   =
   assert (t.init = Uninitialized);
+  Dune_external.set_encoding t.dune_external position_encoding;
   { t with
     init =
       Initialized
@@ -118,6 +133,7 @@ let initialize
 ;;
 
 let modify_workspaces t ~f =
+  incr t.workspace_revision;
   let init =
     match t.init with
     | Uninitialized -> assert false

@@ -57,6 +57,7 @@ let compute_ocaml_code_actions (params : CodeActionParams.t) state doc =
          then Action_inline.unresolved
          else Action_inline.t)
       ; Action_extract.local
+      ; Action_show_ppx_expansion.t state
       ; Action_extract.function_
       ]
   in

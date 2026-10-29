@@ -204,7 +204,14 @@ module Alias = M
 
 let%expect_test "value declaration is not a type declaration" =
   run [ "lib.mli", "val $x : int\n"; "lib.ml", "let x = 1\n" ];
-  [%expect {| [] |}]
+  [%expect
+    {|
+    lib.ml
+    {
+      "end": { "character": 5, "line": 0 },
+      "start": { "character": 4, "line": 0 }
+    }
+    |}]
 ;;
 
 let%expect_test "module type declaration has no implementation" =

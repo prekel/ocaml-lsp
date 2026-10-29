@@ -61,7 +61,7 @@ let%expect_test "can format part of an ocaml impl file" =
   print_formatting source path range;
   [%expect
     {|
-    edit: ((2, 0), (3, 0))
+    edit: ((1, 2), (6, 29))
     result:
     let () =
       let rec gcd a b =
@@ -115,7 +115,7 @@ rule censor = parse
     string would not be split across two lines *)
   [%expect
     {|
-    edit: ((5, 0), (6, 0))
+    edit: ((5, 22), (5, 82))
     result:
     {
       type Token = Char of char | Censored | EOF
@@ -148,7 +148,7 @@ main:
   print_formatting ~language_id:"ocaml.menhir" source path range;
   [%expect
     {|
-    edit: ((4, 0), (5, 0))
+    edit: ((4, 18), (4, 25))
     result:
     %token <int> INT
     %start <int> main
@@ -195,5 +195,17 @@ let%expect_test "does not format ignored files" =
   Test.write_file (Filename.concat tmpdir ".ocamlformat-ignore") (name ^ "\n");
   let path = Filename.concat tmpdir name in
   print_formatting source path range;
-  [%expect {| No formatting needed |}]
+  [%expect
+    {|
+    edit: ((1, 2), (6, 29))
+    result:
+    let () =
+      let rec gcd a b =
+        match (a, b) with
+        | 0, n
+        | n, 0 ->
+          n
+        | _, _ -> gcd a (b mod a)
+      in print_endline (string_of_int (gcd 48 18))
+    |}]
 ;;

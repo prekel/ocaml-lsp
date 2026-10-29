@@ -59,7 +59,7 @@ let%expect_test "reports no definition for lookup failures without stopping the 
     [
       {
         "range": {
-          "end": { "character": 4, "line": 0 },
+          "end": { "character": 10, "line": 0 },
           "start": { "character": 4, "line": 0 }
         },
         "uri": "file:///test.ml"
@@ -68,7 +68,7 @@ let%expect_test "reports no definition for lookup failures without stopping the 
     |}]
 ;;
 
-let%expect_test "definition of a nullary exception leaks Not_found" =
+let%expect_test "definition of a nullary exception resolves without Not_found" =
   let source = "exception E\nE" in
   Helpers.test source (fun client ->
     let* result =
@@ -86,11 +86,15 @@ let%expect_test "definition of a nullary exception leaks Not_found" =
       Fiber.return ());
   [%expect
     {|
-    {
-      "data": { "exn": "Not_found", "backtrace": "<censored>" },
-      "code": -32603,
-      "message": "uncaught exception"
-    }
+    [
+      {
+        "range": {
+          "end": { "character": 11, "line": 0 },
+          "start": { "character": 10, "line": 0 }
+        },
+        "uri": "file:///test.ml"
+      }
+    ]
     |}]
 ;;
 
@@ -113,7 +117,7 @@ let () =
     [
       {
         "range": {
-          "end": { "character": 4, "line": 0 },
+          "end": { "character": 5, "line": 0 },
           "start": { "character": 4, "line": 0 }
         },
         "uri": "file:///test.ml"

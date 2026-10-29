@@ -327,3 +327,9 @@ let task_if_running pool ~f =
 ;;
 
 let inside_test = Env_vars._TEST () |> Option.value ~default:false
+
+let read_file path =
+  match Fs_io.read_file path with
+  | Ok text -> text
+  | Error exn -> raise exn
+;;

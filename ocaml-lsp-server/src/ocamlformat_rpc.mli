@@ -10,6 +10,12 @@ val format_type
   -> typ:string
   -> (string, [> `Msg of string | `No_process ]) result Fiber.t
 
+val format_text
+  :  t
+  -> path:string
+  -> string
+  -> (string, [> `Msg of string | `No_process | `No_V2 ]) result Fiber.t
+
 val format_doc
   :  t
   -> Document.t

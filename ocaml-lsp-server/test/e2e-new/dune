@@ -14,6 +14,8 @@
    %{bin:ocamlformat-rpc}
    %{bin:ocp-indent}
    %{bin:ocp-indent-rpc}
+   (alias ppx_source_fixture/all)
+   (glob_files ppx_source_fixture/*)
    for_ppx.ml
    for_pp.ml
    (package ocaml-lsp-server)))
@@ -55,6 +57,11 @@
     code_action_resolve
     code_actions_annotations
     code_action_safety
+    project_navigation
+    ppx_all
+    ppx_deriving_actions
+    ppx_source_hints
+    inferred_interface_formatting
     code_actions_destruct
     code_actions_interface
     code_actions_quick_fixes

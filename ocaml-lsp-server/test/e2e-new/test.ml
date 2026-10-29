@@ -462,3 +462,22 @@ let print_locations = function
       |> Yojson.Safe.pretty_to_string ~std:false
       |> print_endline)
 ;;
+
+let read_file path =
+  match Fs_io.read_file path with
+  | Ok text -> text
+  | Error exn -> raise exn
+;;
+
+(* Merlin asks Dune for configuration using actual build-context paths, not
+   the temporary paths of Dune 3.24's test action sandboxes. *)
+let fixture_path relative =
+  let cwd = Sys.getcwd () in
+  match String.substr_index cwd ~pattern:"/_build/.sandbox/" with
+  | None -> Filename.concat cwd relative
+  | Some at ->
+    let root = String.prefix cwd at in
+    Filename.concat
+      (Filename.concat root "_build/default/ocaml-lsp-server/test/e2e-new")
+      relative
+;;

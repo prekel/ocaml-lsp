@@ -168,23 +168,26 @@ let format_type t ~typ =
          p)
 ;;
 
-let format_doc t doc =
-  let txt = Document.source doc |> Msource.text in
-  let path = Some (Document.uri doc |> Uri.to_path) in
+let format_text t ~path txt =
+  let path = Some path in
   let* p = get_process t in
   match p with
   | Error `No_process -> Fiber.return @@ Error `No_process
   | Ok p ->
     (match Process.client p with
      | `V2 p ->
-       let+ res =
-         Ocamlformat_rpc.V2.Client.format
-           ~format_args:Ocamlformat_rpc_lib.{ empty_args with path }
-           txt
-           p
-       in
-       Result.map res ~f:(fun to_ -> Diff.edit ~from:txt ~to_)
+       Ocamlformat_rpc.V2.Client.format
+         ~format_args:Ocamlformat_rpc_lib.{ empty_args with path }
+         txt
+         p
      | `V1 _ -> Fiber.return @@ Error `No_V2)
+;;
+
+let format_doc t doc =
+  let txt = Document.source doc |> Msource.text in
+  let path = Document.uri doc |> Uri.to_path in
+  let+ result = format_text t ~path txt in
+  Result.map result ~f:(fun to_ -> Diff.edit ~from:txt ~to_)
 ;;
 
 let create_state () =

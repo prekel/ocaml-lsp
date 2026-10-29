@@ -7,6 +7,7 @@ type t
 val prefer_dot_merlin : bool ref
 val config : t -> Mconfig.t Fiber.t
 val destroy : t -> unit Fiber.t
+val is_installed : t -> bool
 
 module DB : sig
   type config := t
@@ -14,6 +15,7 @@ module DB : sig
 
   val create
     :  trace:(message:(unit -> string) -> verbose:(unit -> string) -> unit Fiber.t)
+    -> worker:Lev_fiber.Thread.t
     -> t
 
   val stop : t -> unit Fiber.t

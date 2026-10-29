@@ -76,6 +76,19 @@ let%expect_test "dynamic registration waits for initialized" =
               { "language": "dune-workspace" }
             ]
           }
+        },
+        {
+          "id": "ocamllsp-cram-dune-files/textDocument/didChange",
+          "method": "textDocument/didChange",
+          "registerOptions": {
+            "documentSelector": [
+              { "language": "cram" },
+              { "language": "dune" },
+              { "language": "dune-project" },
+              { "language": "dune-workspace" }
+            ],
+            "syncKind": 2
+          }
         }
       ]
     }

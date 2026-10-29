@@ -29,7 +29,7 @@ let x = T 43
     [
       {
         "range": {
-          "end": { "character": 5, "line": 1 },
+          "end": { "character": 6, "line": 1 },
           "start": { "character": 5, "line": 1 }
         },
         "uri": "file:///file.ml"
@@ -53,7 +53,7 @@ let x = T 43
     [
       {
         "range": {
-          "end": { "character": 5, "line": 1 },
+          "end": { "character": 6, "line": 1 },
           "start": { "character": 5, "line": 1 }
         },
         "uri": "file:///file.ml"
@@ -76,7 +76,7 @@ let t = T 42
     [
       {
         "range": {
-          "end": { "character": 5, "line": 1 },
+          "end": { "character": 6, "line": 1 },
           "start": { "character": 5, "line": 1 }
         },
         "uri": "file:///file.ml"

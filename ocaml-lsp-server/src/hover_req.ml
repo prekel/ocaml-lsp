@@ -15,6 +15,7 @@ let environment_mode =
 
 let hover_at_cursor parsetree (`Logical (cursor_line, cursor_col)) =
   let result = ref None in
+  let type_declaration_at_cursor = ref None in
   let is_at_cursor ({ loc_start; loc_end; _ } : Ocaml_parsing.Location.t) =
     let start_col = loc_start.pos_cnum - loc_start.pos_bol in
     let end_col = loc_end.pos_cnum - loc_end.pos_bol in
@@ -109,7 +110,7 @@ let hover_at_cursor parsetree (`Logical (cursor_line, cursor_col)) =
         if is_at_keyword
         then result := Some `Type_enclosing
         else Ast_iterator.default_iterator.expr self expr
-      | Pexp_extension (ppx, _) when is_at_cursor ppx.loc -> result := Some (`Ppx ppx.txt)
+      | Pexp_extension (ppx, _) when is_at_cursor ppx.loc -> result := Some `Ppx
       | _ -> Ast_iterator.default_iterator.expr self expr)
   in
   (* Hover a value declaration in a signature *)
@@ -122,7 +123,13 @@ let hover_at_cursor parsetree (`Logical (cursor_line, cursor_col)) =
   in
   (* Hover a type *)
   let typ (_ : Ast_iterator.iterator) (typ : Parsetree.core_type) =
-    if is_at_cursor typ.ptyp_loc then result := Some `Type_enclosing
+    if is_at_cursor typ.ptyp_loc
+    then
+      result
+      := Some
+           (match !type_declaration_at_cursor with
+            | None -> `Type_enclosing
+            | Some declaration -> `Source_type (Source_ast.Core_type declaration))
   in
   (* Hover a variant constructor where it is declared *)
   let constructor_declaration
@@ -143,15 +150,23 @@ let hover_at_cursor parsetree (`Logical (cursor_line, cursor_col)) =
   (* Hover a type declaration *)
   let type_declaration (self : Ast_iterator.iterator) (decl : Parsetree.type_declaration) =
     if is_at_cursor decl.ptype_name.loc
-    then result := Some `Type_enclosing
+    then result := Some (`Source_type (Source_ast.Declaration decl))
     else if is_at_cursor decl.ptype_loc
     then (
       let attribute_at_cursor =
         List.find decl.ptype_attributes ~f:(fun attr -> is_at_cursor attr.attr_loc)
       in
       match attribute_at_cursor with
-      | Some attr -> result := Some (`Ppx attr.attr_name.txt)
-      | None -> Ast_iterator.default_iterator.type_declaration self decl)
+      | Some attr ->
+        (* Produce a hover for the attribute, if it's name is hovered, otherwise
+           bail. *)
+        if String.equal attr.attr_name.txt "deriving" || is_at_cursor attr.attr_name.loc
+        then result := Some `Ppx
+      | None ->
+        let previous = !type_declaration_at_cursor in
+        type_declaration_at_cursor := Some decl;
+        Ast_iterator.default_iterator.type_declaration self decl;
+        type_declaration_at_cursor := previous)
   in
   (* Classes and objects *)
   let class_declaration
@@ -333,6 +348,7 @@ let format_ppx_expansion ~ppx ~expansion =
 ;;
 
 let type_enclosing_hover
+      ~source_type
       ~(server : State.t Server.t)
       ~(doc : Document.t)
       ~with_syntax_doc
@@ -367,11 +383,21 @@ let type_enclosing_hover
   in
   let* type_enclosing =
     Document.Merlin.type_enclosing
+      ?source_type
       ~name:"hover-enclosing"
       merlin
       (Position.logical position)
       verbosity
       ~with_syntax_doc
+  in
+  let* generated_signature =
+    match source_type with
+    | Some (Source_ast.Declaration declaration) ->
+      Document.Merlin.with_pipeline_exn ~name:"deriving-signature" merlin (fun pipeline ->
+        Option.bind (Ppx_expansion.for_declaration pipeline declaration) ~f:(fun ppx ->
+          Option.map (Ppx_expansion.signature pipeline ppx) ~f:(fun signature ->
+            Ppx_expansion.name ppx, signature)))
+    | Some (Core_type _) | None -> Fiber.return None
   in
   match type_enclosing with
   | None -> Fiber.return None
@@ -400,6 +426,12 @@ let type_enclosing_hover
         in
         typ
     in
+    let typ =
+      match generated_signature with
+      | None -> typ
+      | Some (name, signature) ->
+        sprintf "%s\n\n(* ppx %s signature *)\n%s" typ name signature
+    in
     let contents =
       let markdown =
         Capabilities.supports_markdown
@@ -412,6 +444,25 @@ let type_enclosing_hover
     Fiber.return (Some hover)
 ;;
 
+let ppx_hover pipeline ppx =
+  let open Option.O in
+  let contents =
+    match Ppx_expansion.signature pipeline ppx with
+    | Some signature ->
+      Some
+        (`MarkedString
+            { Lsp.Types.MarkedString.language = Some "ocaml"
+            ; value =
+                sprintf "(* ppx %s signature *)\n%s" (Ppx_expansion.name ppx) signature
+            })
+    | None ->
+      Option.map (Ppx_expansion.expansion pipeline ppx) ~f:(fun expansion ->
+        format_ppx_expansion ~ppx:(Ppx_expansion.name ppx) ~expansion)
+  in
+  let+ contents = contents in
+  Hover.create ~contents ~range:(Ppx_expansion.range ppx) ()
+;;
+
 let handle server { HoverParams.textDocument = { uri }; position; _ } mode =
   Fiber.of_thunk (fun () ->
     let state : State.t = Server.state server in
@@ -422,35 +473,46 @@ let handle server { HoverParams.textDocument = { uri }; position; _ } mode =
     match Document.kind doc with
     | `Other -> Fiber.return None
     | `Merlin merlin ->
-      let* parsetree =
-        Document.Merlin.with_pipeline_exn
-          ~name:"hover"
-          (Document.merlin_exn doc)
-          (fun pipeline -> Mpipeline.reader_parsetree pipeline)
+      let* expanded_hover =
+        Document.Merlin.with_pipeline_exn ~name:"ppx-hover" merlin (fun pipeline ->
+          let offset =
+            Text_document.absolute_position (Document.text_document doc) position
+          in
+          let logical = Msource.get_logical (Document.source doc) (`Offset offset) in
+          Option.bind
+            (Ppx_expansion.at_position ~hover:true pipeline logical)
+            ~f:(ppx_hover pipeline))
       in
-      (match hover_at_cursor parsetree (Position.logical position) with
-       | None -> Fiber.return None
-       | Some `Type_enclosing ->
-         let with_syntax_doc =
-           match state.configuration.data.syntax_documentation with
-           | Some { enable = true } -> true
-           | Some _ | None -> false
-         in
-         type_enclosing_hover ~server ~doc ~merlin ~mode ~uri ~position ~with_syntax_doc
-       | Some (`Ppx ppx) ->
-         let+ ppxed_source =
-           Document.Merlin.dispatch_exn
-             ~name:"expand-ppx"
+      (match expanded_hover with
+       | Some hover -> Fiber.return (Some hover)
+       | None ->
+         let* parsetree =
+           Document.Merlin.with_pipeline_exn
+             ~name:"hover"
              (Document.merlin_exn doc)
-             (Query_protocol.Expand_ppx (Position.logical position))
+             (fun pipeline -> Mpipeline.reader_parsetree pipeline)
          in
-         (match ppxed_source with
-          | `Found { Query_protocol.code; attr_start; attr_end } ->
-            let range =
-              Range.of_loc
-                { loc_start = attr_start; loc_end = attr_end; loc_ghost = false }
+         (match hover_at_cursor parsetree (Position.logical position) with
+          | None -> Fiber.return None
+          | Some ((`Type_enclosing | `Source_type _) as kind) ->
+            let with_syntax_doc =
+              match state.configuration.data.syntax_documentation with
+              | Some { enable = true } -> true
+              | Some _ | None -> false
             in
-            let contents = format_ppx_expansion ~ppx ~expansion:code in
-            Some (Hover.create ~contents ~range ())
-          | `No_ppx -> None)))
+            let source_type =
+              match kind with
+              | `Type_enclosing -> None
+              | `Source_type target -> Some target
+            in
+            type_enclosing_hover
+              ~source_type
+              ~server
+              ~doc
+              ~merlin
+              ~mode
+              ~uri
+              ~position
+              ~with_syntax_doc
+          | Some `Ppx -> Fiber.return None)))
 ;;
