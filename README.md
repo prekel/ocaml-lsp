@@ -446,3 +446,18 @@ date. Also, both servers seem deprecated.
   use merlin which means that it supports fewer versions of OCaml and offers less
   "smart" functionality - especially in the face of sources that do not yet
   compile.
+
+## Additional navigation and PPX support
+
+This branch adds workspace references and call hierarchy, richer definition and
+implementation ranges, installed-library browsing, and standard LSP navigation
+and highlighting for Dune dependencies and generated sources. See
+[navigation](ocaml-lsp-server/docs/navigation.md),
+[project references](ocaml-lsp-server/docs/project-references.md), and
+[installed libraries](ocaml-lsp-server/docs/library-sources.md).
+
+PPX attributes and extension points expose generated signatures and a
+**Show generated code** action. Source type hovers, code lenses and inlay hints
+exclude generated bindings that reuse source locations. Explicit range formatting
+preserves project style while formatting the selected text even in ignored files.
+These features use standard LSP requests and the existing show-document capability.

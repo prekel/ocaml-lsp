@@ -1,3 +1,17 @@
+# Unreleased
+
+- Port workspace references, call hierarchy, installed-library browsing and
+  interface-preferred navigation to OCaml 5.5 / Merlin 5.9. Keep master’s native
+  project occurrences as a fallback and validate compiler source digests with
+  BLAKE2b-128.
+- Add Dune dependency, external-package and generated-source navigation and
+  negotiated semantic tokens for local dependencies.
+- Add PPX signatures and generated-code actions; preserve source locations in
+  hover, code lenses and inlay hints. Format inferred interfaces using project
+  settings and format explicit selections independently of ignore listings.
+- Make refactoring selections and relocation safe, preserve evaluation and
+  allocation identity, and explain rejected transformations to supporting clients.
+
 # 1.28.0
 
 ## Features
