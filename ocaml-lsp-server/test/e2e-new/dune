@@ -54,6 +54,7 @@
     code_action_protocol
     code_action_resolve
     code_actions_annotations
+    code_action_safety
     code_actions_destruct
     code_actions_interface
     code_actions_quick_fixes

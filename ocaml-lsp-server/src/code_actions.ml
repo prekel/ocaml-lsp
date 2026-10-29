@@ -116,6 +116,19 @@ let compute server (params : CodeActionParams.t) =
   in
   let actions xs =
     let xs =
+      let supports_disabled =
+        let open Option.O in
+        Option.value
+          ~default:false
+          (let* td = (State.client_capabilities state).textDocument in
+           let* ca = td.codeAction in
+           ca.disabledSupport)
+      in
+      if supports_disabled
+      then xs
+      else List.filter xs ~f:(fun (a : CodeAction.t) -> Option.is_none a.disabled)
+    in
+    let xs =
       match params.context.only with
       | None -> xs
       | Some _ ->

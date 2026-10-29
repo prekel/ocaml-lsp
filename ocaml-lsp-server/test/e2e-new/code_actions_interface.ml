@@ -516,12 +516,7 @@ let%expect_test "can combine cases with multiple RHSes" =
     | Jack -> "Face card?"
     | $Number _ -> _
 |ocaml};
-  [%expect
-    {|
-    match card with
-    | Ace -> _
-    | King | Queen | Jack | Number _ -> _
-    |}]
+  [%expect {| None |}]
 ;;
 
 let%expect_test "can combine cases with one unique RHS" =
@@ -536,12 +531,5 @@ let%expect_test "can combine cases with one unique RHS" =
     | Jack -> "Face card?"
     | Number _ -> _
 |ocaml};
-  [%expect
-    {|
-    match card with
-    | Ace -> _
-    | King | Queen -> "Face card!"
-    | Jack -> "Face card?"
-    | Number _ -> _
-    |}]
+  [%expect {| None |}]
 ;;

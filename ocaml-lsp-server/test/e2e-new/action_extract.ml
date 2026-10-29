@@ -10,8 +10,9 @@ let f =
   [%expect
     {|
     let f =
-      let var_name = 1 in
-    0 + var_name |}]
+      (let var_name = 1 in
+    0 + var_name)
+    |}]
 ;;
 
 let%expect_test "extract local expression" =
@@ -25,8 +26,9 @@ let f =
     {|
     let f =
       let x = 2 in
-      let var_name = 0 + 1 + x in
-    var_name + 1 |}]
+      (let var_name = 0 + 1 + x in
+    var_name + 1)
+    |}]
 ;;
 
 let%expect_test "extract function single parameter" =

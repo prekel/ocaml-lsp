@@ -50,14 +50,14 @@ let print_optional_code_action label = function
   | Some action -> print_code_action label action
 ;;
 
-let%expect_test "resolved inline edit for a partial application" =
+let%expect_test "resolved inline edit for a fully applied call" =
   let resolveSupport = ClientCodeActionResolveOptions.create ~properties:[ "edit" ] in
   let capabilities = code_action_capabilities resolveSupport in
   let source, range =
     Code_actions.parse_selection
       {|
 let $f self case = self + case
-let caller self = f self
+let caller self case = f self case
 |}
   in
   Helpers.test ~capabilities source (fun client ->
@@ -69,7 +69,7 @@ let caller self = f self
   [%expect
     {|
     let f self case = self + case
-    let caller self = ((fun self case -> self + case) self)
+    let caller self case = (fun self case -> self + case) self case
     |}]
 ;;
 

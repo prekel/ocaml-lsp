@@ -24,3 +24,8 @@ val non_batchable
   -> t
 
 val source_text : Document.t -> Loc.t -> string option
+val disabled : kind:CodeActionKind.t -> title:string -> string -> CodeAction.t
+val fresh_name : Document.t -> string -> string
+val has_comments : Mpipeline.t -> Range.t -> bool
+val relocatable_expression : Typedtree.expression -> Env.t -> bool
+val enclosing_nodes : Mpipeline.t -> Range.t -> Mbrowse.t
