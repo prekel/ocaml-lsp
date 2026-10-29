@@ -307,6 +307,32 @@ let%expect_test "of_path -> to_path" =
     |}]
 ;;
 
+let%expect_test "to_string preserves paths that resemble drive letters" =
+  let test uri = Printf.printf "%s -> %s\n" uri (Uri.to_string (Uri.of_string uri)) in
+  List.iter
+    test
+    [ "file:///_:/path"
+    ; "file:///1:/path"
+    ; "file:///%C3%A9:/path"
+    ; "untitled:_:path"
+    ; "untitled:1:path"
+    ; "untitled:%C3%A9:path"
+    ; "file:///C:/path"
+    ; "untitled:C:path"
+    ];
+  [%expect
+    {|
+    file:///_:/path -> file:///_%3A/path
+    file:///1:/path -> file:///1%3A/path
+    file:///%C3%A9:/path -> file:///%C3%A9%3A/path
+    untitled:_:path -> untitled:_%3Apath
+    untitled:1:path -> untitled:1%3Apath
+    untitled:%C3%A9:path -> untitled:%C3%A9%3Apath
+    file:///C:/path -> file:///c%3A/path
+    untitled:C:path -> untitled:c%3Apath
+    |}]
+;;
+
 let%expect_test "of_string -> to_path" =
   let test_of_string_to_path =
     let test s =
