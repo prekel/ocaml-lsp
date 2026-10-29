@@ -449,6 +449,10 @@ date. Also, both servers seem deprecated.
 
 ## Additional navigation and PPX support
 
+For a comparison with upstream master from the perspective of VS Code, including
+installation and updates through `opam pin`, see
+[VS Code features compared with master](ocaml-lsp-server/docs/vscode-features-vs-master.md).
+
 This branch adds workspace references and call hierarchy, richer definition and
 implementation ranges, installed-library browsing, and standard LSP navigation
 and highlighting for Dune dependencies and generated sources. See

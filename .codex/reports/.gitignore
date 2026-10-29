@@ -1,0 +1,4 @@
+# Raw local artifacts stay available without entering the repository diff.
+/master-port/
+/worktree-swap/
+/*.log
