@@ -276,7 +276,8 @@ or target typing pipelines. Regression tests check this with 50 unrelated buffer
 and a malformed unrelated annotation, as well as modified targets, same-size disk
 edits, namespaces, shadowing, cancellation, UTF-8/UTF-16 and rebuilt annotations.
 
-Reproduce after `dune build @install` and installing the e2e dependencies:
+Reproduce with Node.js after `dune build @install`; no JavaScript packages
+are required:
 
 ```sh
 node ocaml-lsp-server/bench/navigation.cjs /path/to/ocamllsp
